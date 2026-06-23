@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Временные и рабочие артефакты конвейера
+intermediate/
+log/
+uploads/
+
+# Результаты
+_RU.pdf
+*.pdf
+
+# Системный мусор
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Сводки-инспекции (генерируются)
+_inspect.txt
+_toc.txt
