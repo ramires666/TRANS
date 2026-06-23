@@ -44,7 +44,7 @@ SECTION_PATTERNS = {
     },
 }
 
-LIST_BULLET = r"^\s*[•●○\-–▪◆]\s+(.*)$"
+LIST_BULLET = r"^\s*[•●○\-–▪◆□]\s+(.*)$"
 LIST_NUM = r"^\s*(\d+)\.\s+(.*)$"
 
 

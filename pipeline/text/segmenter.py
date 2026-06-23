@@ -38,11 +38,19 @@ def _build_toc_index(toc: list) -> dict:
 
 
 def _block_text(block: dict) -> str:
-    parts = []
+    # Склеиваем спаны внутри строки без разделителя (они соседствуют),
+    # а СТРОКИ блока — через "\n". Это сохраняет переносы строк и ведущие
+    # пробелы/табуляции каждой строки ровно как в оригинале, чтобы LLM получил
+    # структурированный фрагмент, а не сплошную кашу.
+    lines = []
     for ln in block["lines"]:
-        for sp in ln["spans"]:
-            parts.append(sp["text"])
-    return "".join(parts)
+        lines.append("".join(sp["text"] for sp in ln["spans"]))
+    text = "\n".join(lines)
+    # Нормализуем маркер списка □ (U+25A1, часто извлекается PyMuPDF как
+    # literal) в обычный буллет • — и классификатор, и LLM, и валидатор
+    # работают с • корректно. Заменяем только в начале строк.
+    text = re.sub(r"(?m)(^\s*)□", r"\1•", text)
+    return text
 
 
 def _block_first_style(block: dict) -> tuple[str, float, int]:
@@ -145,7 +153,8 @@ def segment(parse_data: dict, cfg: dict, logger) -> list[dict]:
         tables = pinfo.get("tables", [])
 
         for b in blocks:
-            text = _block_text(b).strip()
+            raw = _block_text(b)
+            text = raw.strip()
             if not text:
                 continue
             font, size, color = _block_first_style(b)
@@ -171,9 +180,10 @@ def segment(parse_data: dict, cfg: dict, logger) -> list[dict]:
             sid += 1
             segs.append({
                 "id": sid, "type": stype, "page": pno, "bbox": b["bbox"],
-                "section_id": section_id, "text": text, "anchors": anchors,
+                "section_id": section_id, "anchors": anchors,
                 "font": font, "size": size, "color": color,
                 "table_idx": cell_table_idx,
+                "text": raw,  # неизменённое содержимое блока с \n и отступами
             })
 
     logger.info("Сегментов: %d", len(segs))

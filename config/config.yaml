@@ -45,6 +45,10 @@ cache_db: "intermediate/translations.db"
 # Шрифт для целевого языка (TTF). Пусто -> авто-поиск DejaVu/Arial/Noto
 target_font: ""
 
+# Подбирать ближайший похожий шрифт под оригинал (по семейству/весу/стилю).
+# Берёт поле 'font' каждого сегмента и ищет TTF с глифами target_lang.
+match_fonts: false
+
 # Промежуточные файлы (устаревшие поля; реальные пути лежат в intermediate/<hash>/)
 parse_path: "intermediate/parse.json"
 segments_path: "intermediate/segments.json"
