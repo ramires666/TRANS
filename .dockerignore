@@ -1,0 +1,12 @@
+﻿__pycache__/
+*.pyc
+intermediate/
+log/
+uploads/
+*.pdf
+.git/
+.gitignore
+README.md
+PLAN.md
+assets/
+config/glossary.csv

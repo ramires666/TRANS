@@ -121,6 +121,16 @@ def main() -> None:
     start_idx = STAGES.index(args.from_stage)
     stop_idx = STAGES.index(args.stop_stage)
 
+    artifact_stages = {"parse", "segment", "translate"}
+
+    for i in range(start_idx):
+        prev = STAGES[i]
+        if prev in artifact_stages and not stage_done(cfg, sh, prev):
+            start_idx = i
+            logger.warning("Артефакт стадии '%s' отсутствует — откатываюсь к ней",
+                           prev)
+            break
+
     if args.resume:
         for i in range(start_idx, stop_idx + 1):
             stage = STAGES[i]
@@ -134,7 +144,6 @@ def main() -> None:
                 start_idx = i + 1
             else:
                 break
-        start_idx = max(start_idx, STAGES.index(args.from_stage))
 
     for i in range(start_idx, stop_idx + 1):
         stage = STAGES[i]

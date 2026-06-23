@@ -75,8 +75,12 @@ def validate(src: str, out: str, logger, cfg: dict | None = None) -> int:
         problems.append("Обнаружены символы-заглушки (□) — проблема со шрифтом")
 
     md = o["metadata"]
+    cfg_md = (cfg or {}).get("metadata") or {}
     for k in ("title", "author", "subject"):
-        if not md.get(k):
+        expected = (cfg_md.get(k) or "").strip()
+        if expected:
+            continue
+        if s["metadata"].get(k) and not md.get(k):
             problems.append(f"Метаданные пусты: {k}")
 
     logger.info("--- Сравнение ---")

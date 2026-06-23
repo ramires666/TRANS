@@ -1,0 +1,66 @@
+# Конфигурация конвейера перевода PDF (обобщённая)
+pdf_path: ""           # путь к исходному PDF (CLI: --in переопределяет)
+out_path: "_RU.pdf"     # выходной PDF
+
+# Языковая пара
+source_lang: "zh"      # zh, en, ja, de, fr, es ...
+target_lang: "ru"      # ru, en, de, fr, es, ja ...
+
+# Якоря перекрёстных ссылок.
+# Для пресета source_lang=zh логично оставить ru-перевод: Рис./Табл.
+# Чтобы переопределить — раскомментируй секцию ниже:
+# anchors:
+#   fig:
+#     src_regex: '图\s*(\d+-\d+)'
+#     dst_label: 'Рис.'
+#     dst_regex: 'Рис\.?\s*(\d+-\d+)'
+#   tab:
+#     src_regex: '表\s*(\d+-\d+)'
+#     dst_label: 'Табл.'
+#     dst_regex: 'Табл\.?\s*(\d+-\d+)'
+
+# LLM (OpenAI-совместимый эндпоинт)
+llm_base_url: "http://127.0.0.1:8080/v1"
+llm_api_key: "not-needed"
+llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
+enable_thinking: false
+max_tokens: 4096
+temperature: 0.2
+top_p: 0.9
+request_timeout: 300
+
+# Параллелизм
+workers: 2
+
+# Каталоги
+tmp_dir: "intermediate"
+log_dir: "log"
+
+# Глоссарий
+glossary_path: "config/glossary.csv"
+
+# Кэш переводов (будет лежать в intermediate/<hash>/translations.db)
+cache_db: "intermediate/translations.db"
+
+# Шрифт для целевого языка (TTF). Пусто -> авто-поиск DejaVu/Arial/Noto
+target_font: ""
+
+# Промежуточные файлы (устаревшие поля; реальные пути лежат в intermediate/<hash>/)
+parse_path: "intermediate/parse.json"
+segments_path: "intermediate/segments.json"
+errors_path: "log/errors.jsonl"
+log_path: "log/translate.log"
+
+# Перевод: ограничение длины сегмента (символы)
+max_segment_chars: 1500
+
+# Сборка
+builder_min_fontsize: 6.0
+builder_default_fontsize: 10.0
+
+# Метаданные результата
+metadata:
+  title: ""
+  author: ""
+  subject: ""
+  keywords: ""

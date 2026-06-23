@@ -1,0 +1,21 @@
+services:
+  translator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: pdf-translator:latest
+    container_name: pdf-translator
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./config:/app/config:ro
+      - ./assets:/app/assets:ro
+      - ../intermediate:/app/intermediate
+      - ../log:/app/log
+      - ../uploads:/app/uploads
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped
+
+  # Внешняя LLM (OpenAI-совместимый эндпоинт). Запусти отдельно и укажи
+  # llm_base_url в config.yaml как http://host.docker.internal:8080/v1
