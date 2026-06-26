@@ -19,7 +19,7 @@ target_lang: "ru"      # ru, en, de, fr, es, ja ...
 #     dst_label: 'Табл.'
 #     dst_regex: 'Табл\.?\s*(\d+-\d+)'
 
-# LLM (OpenAI-совместимый эндпоинт)
+# LLM (OpenAI-совместимый эндпоинт) — для текста
 llm_base_url: "http://127.0.0.1:8080/v1"
 llm_api_key: "not-needed"
 llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
@@ -28,6 +28,16 @@ max_tokens: 4096
 temperature: 0.2
 top_p: 0.9
 request_timeout: 300
+
+# Vision LLM (OpenAI-совместимый эндпоинт) — для OCR/изображений
+# Если не задан — используется llm_base_url / llm_model
+vision_llm_base_url: ""
+vision_llm_api_key: ""
+vision_llm_model: ""  # например: "llava", "qwen-vl", "gpt-4-vision"
+vision_max_tokens: 2048
+vision_temperature: 0.1
+vision_top_p: 0.9
+vision_request_timeout: 600
 
 # Параллелизм
 workers: 2
@@ -61,6 +71,29 @@ max_segment_chars: 1500
 # Сборка
 builder_min_fontsize: 6.0
 builder_default_fontsize: 10.0
+
+# Нормализация маркеров списков для любого языка.
+# bullet_chars: строка с юникодными символами-заменителями
+# bullet_replace: на что заменять (по умолчанию "•")
+bullet_chars: "•●○◌◦◆◇■□▪▫▶▷◀◁▲△▼▽◄►◅▻"
+bullet_replace: "•"
+remove_pua: true
+
+# OCR/перевод текста в изображениях
+enable_vision_ocr: false
+
+# Режим Markdown-перевода (второй опциональный вариант)
+# При enable_markdown=true конвейер переводит каждую страницу целиком в Markdown
+# через LLM и собирает PDF как overlay поверх исходника.
+enable_markdown: false
+
+# Параметры LLM для markdown-режима (если не заданы — используются общие max_tokens/temperature/top_p)
+markdown_max_tokens: 4096
+markdown_temperature: 0.2
+markdown_top_p: 0.9
+
+# Системный промпт для markdown-режима (если пусто — используется встроенный)
+markdown_system_prompt: ""
 
 # Метаданные результата
 metadata:

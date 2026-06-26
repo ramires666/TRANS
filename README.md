@@ -110,7 +110,16 @@ python -m app.cli --in "file.pdf" --out "_RU.pdf" --resume
 
 # только валидация готового
 python -m app.cli --validate "_RU.pdf"
+
+# режим Markdown (страница целиком -> Markdown -> PDF overlay)
+python -m app.cli --in "file.pdf" --out "_RU.pdf" --mode markdown --resume
 ```
+
+Режим Markdown переводит каждую страницу PDF целиком через LLM с промптом на
+восстановление структуры (заголовки, таблицы, списки) и оверлеем результата
+поверх исходного PDF. Удобен для документов с «нарисованными» таблицами и
+сложной вёрсткой. Выбирается также в веб-интерфейсе через выпадающий список
+«Режим».
 
 ### Веб-интерфейс
 
@@ -141,6 +150,7 @@ docker compose -f docker/docker-compose.yml up --build
 │  ├─ io/artifacts.py   # JSON I/O + RESUME по sha256 исходника
 │  ├─ fonts/fonts.py    # поиск TTF
 │  ├─ glossary/glossary.py
+│  ├─ markdown/         # второй режим: PDF -> Markdown -> PDF overlay
 │  ├─ pdf/              # parser, builder, validator, inspect
 │  ├─ text/segmenter.py
 │  └─ translate/translator.py

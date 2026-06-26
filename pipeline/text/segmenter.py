@@ -37,7 +37,9 @@ def _build_toc_index(toc: list) -> dict:
     return idx
 
 
-def _block_text(block: dict) -> str:
+from pipeline.pdf.builder import _normalize_markers
+
+def _block_text(block: dict, cfg: dict | None = None) -> str:
     # Склеиваем спаны внутри строки без разделителя (они соседствуют),
     # а СТРОКИ блока — через "\n". Это сохраняет переносы строк и ведущие
     # пробелы/табуляции каждой строки ровно как в оригинале, чтобы LLM получил
@@ -46,10 +48,8 @@ def _block_text(block: dict) -> str:
     for ln in block["lines"]:
         lines.append("".join(sp["text"] for sp in ln["spans"]))
     text = "\n".join(lines)
-    # Нормализуем маркер списка □ (U+25A1, часто извлекается PyMuPDF как
-    # literal) в обычный буллет • — и классификатор, и LLM, и валидатор
-    # работают с • корректно. Заменяем только в начале строк.
-    text = re.sub(r"(?m)(^\s*)□", r"\1•", text)
+    # Нормализуем все маркеры списков для любого языка
+    text = _normalize_markers(text, cfg)
     return text
 
 
@@ -153,7 +153,7 @@ def segment(parse_data: dict, cfg: dict, logger) -> list[dict]:
         tables = pinfo.get("tables", [])
 
         for b in blocks:
-            raw = _block_text(b)
+            raw = _block_text(b, cfg)
             text = raw.strip()
             if not text:
                 continue

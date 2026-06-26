@@ -21,6 +21,7 @@ from pipeline.config.loader import (ROOT, ensure_dirs, load_config, resolve_path
 from pipeline.io.artifacts import artifact_paths, source_hash, stage_done
 
 STAGES = ["parse", "segment", "translate", "build", "validate"]
+MODES = ["pipeline", "markdown"]
 
 
 def _mod(stage: str):
@@ -81,6 +82,39 @@ def run_stage(stage: str, cfg: dict, logger, args, ap: dict, src_hash: str) -> b
         return False
 
 
+def run_markdown(cfg: dict, logger, args, ap: dict, sh: str) -> bool:
+    """Запускает markdown-режим: PDF -> Markdown -> PDF overlay."""
+    from pipeline.markdown.translator import translate_pdf
+    from pipeline.markdown.builder import build_pdf
+    from pipeline.pdf.validator import validate
+
+    src_pdf = args.inp or cfg["pdf_path"]
+    out_path = args.out or cfg["out_path"]
+
+    pages_md_path = str(ap.get("pages_md"))
+    resume = bool(args.resume)
+
+    # 1. Перевод страниц в Markdown
+    pages_md = translate_pdf(
+        src_pdf, cfg, logger,
+        out_md_json=pages_md_path,
+        limit=args.limit or 0,
+        resume=resume,
+    )
+
+    # 2. Сборка PDF
+    build_pdf(src_pdf, pages_md, cfg, logger, out_path=out_path)
+
+    # 3. Валидация
+    logger.info("=== ЭТАП: VALIDATE ===")
+    try:
+        rc = validate(src_pdf, out_path, logger, cfg)
+        return rc == 0
+    except Exception as e:
+        logger.exception("Валидация завершилась ошибкой: %s", e)
+        return False
+
+
 def main() -> None:
     ap_cli = argparse.ArgumentParser(description="Конвейер перевода PDF")
     ap_cli.add_argument("--in", dest="inp")
@@ -95,6 +129,9 @@ def main() -> None:
     ap_cli.add_argument("--limit", type=int, default=0)
     ap_cli.add_argument("--validate", dest="validate_only")
     ap_cli.add_argument("--inspect", dest="inspect_pdf")
+    ap_cli.add_argument("--mode", dest="mode", default="pipeline",
+                        choices=MODES,
+                        help="режим работы: pipeline (по умолчанию) или markdown")
     args = ap_cli.parse_args()
 
     cfg = load_config(args.config)
@@ -117,6 +154,12 @@ def main() -> None:
     sh = source_hash(src_pdf)
     ap = artifact_paths(cfg, sh)
     logger.info("Исходник: %s  hash=%s", resolve_path(src_pdf), sh)
+
+    # Markdown-режим: отдельный упрощённый pipeline
+    if args.mode == "markdown" or cfg.get("enable_markdown"):
+        logger.info("Режим: markdown")
+        ok = run_markdown(cfg, logger, args, ap, sh)
+        sys.exit(0 if ok else 2)
 
     start_idx = STAGES.index(args.from_stage)
     stop_idx = STAGES.index(args.stop_stage)

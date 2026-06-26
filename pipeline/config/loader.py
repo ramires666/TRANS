@@ -48,7 +48,16 @@ def setup_logger(cfg: dict[str, Any], name: str = "trans") -> logging.Logger:
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    ch = logging.StreamHandler(sys.stdout)
+    # На Windows консоль часто в cp1251; принудительно используем UTF-8 writer
+    # с errors='replace', чтобы не падать на юникодных путях и иероглифах.
+    if sys.platform == "win32":
+        import io
+        stdout_writer = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace",
+            line_buffering=sys.stdout.line_buffering)
+        ch = logging.StreamHandler(stdout_writer)
+    else:
+        ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
     logger.addHandler(ch)

@@ -294,18 +294,20 @@ class Translator:
         messages = self._build_messages(seg)
         last_err = None
         ru = ""
-        for attempt in range(2):
+        max_attempts = 3
+        for attempt in range(max_attempts):
             try:
-                ru = self._call_llm(messages, hint=RETRY_TMPL if attempt == 1 else None)
+                hint = RETRY_TMPL if attempt > 0 else None
+                ru = self._call_llm(messages, hint=hint)
             except Exception as e:
                 last_err = str(e)
                 continue
-            if self._check_anchors(text, ru):
+            if ru and ru.strip() and self._check_anchors(text, ru):
                 self.cache.put(key, text, ru, self.model, self.prompt_hash, 1)
                 return {"id": seg["id"], "src": text, "dst": ru,
                         "cached": False, "ok": True}
 
-        if ru:
+        if ru and ru.strip():
             self.cache.put(key, text, ru, self.model, self.prompt_hash, 0)
             self._log_error(seg, text, ru, "anchors_lost")
             return {"id": seg["id"], "src": text, "dst": ru,

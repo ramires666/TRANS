@@ -180,6 +180,12 @@ HTML_PAGE = r"""<!doctype html>
       <label><input type="checkbox" id="resume" checked> <span data-i18n="resume">Resume (пропустить готовые этапы)</span></label>
       <label><input type="checkbox" id="fromTranslate"> <span data-i18n="translate_only">Только перевод</span></label>
       <label><span data-i18n="limit">Лимит сегментов:</span> <input type="number" id="limit" min="0" value="0" title="0 = все"></label>
+      <label><span data-i18n="mode">Режим:</span>
+        <select id="mode" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;">
+          <option value="pipeline" data-i18n="mode_pipeline">Pipeline (сегменты)</option>
+          <option value="markdown" data-i18n="mode_markdown">Markdown (страница целиком)</option>
+        </select>
+      </label>
     </div>
 
     <div class="row">
@@ -246,6 +252,9 @@ const I18N = {
     resume: 'Resume (пропустить готовые этапы)',
     translate_only: 'Только перевод',
     limit: 'Лимит сегментов:',
+    mode: 'Режим:',
+    mode_pipeline: 'Pipeline (сегменты)',
+    mode_markdown: 'Markdown (страница целиком)',
     start: 'Перевести',
     cancel: 'Отмена',
     reset: 'Сбросить кэш',
@@ -292,6 +301,9 @@ const I18N = {
     resume: 'Resume (skip finished stages)',
     translate_only: 'Translation only',
     limit: 'Segment limit:',
+    mode: 'Mode:',
+    mode_pipeline: 'Pipeline (segments)',
+    mode_markdown: 'Markdown (whole page)',
     start: 'Translate',
     cancel: 'Cancel',
     reset: 'Reset cache',
@@ -464,6 +476,7 @@ startBtn.addEventListener('click', async () => {
       job: data.job_id, src: data.path,
       resume: $('#resume').checked, from_translate: $('#fromTranslate').checked,
       limit: parseInt($('#limit').value)||0,
+      mode: $('#mode').value,
     };
     const r2 = await fetch('/api/start', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -656,9 +669,11 @@ def _new_job(src_path: str) -> dict:
     }
 
 
-def _run_pipeline(job: dict, resume: bool, from_translate: bool, limit: int):
+def _run_pipeline(job: dict, resume: bool, from_translate: bool, limit: int,
+                  mode: str = "pipeline"):
     cmd = [sys.executable, "-m", "app.cli",
-           "--in", job["src"], "--out", job["out_path"]]
+           "--in", job["src"], "--out", job["out_path"],
+           "--mode", mode]
     if resume:
         cmd.append("--resume")
     if from_translate:
@@ -869,6 +884,9 @@ async def start(payload: dict, background_tasks: BackgroundTasks = None):
     resume = bool(payload.get("resume", True))
     from_translate = bool(payload.get("from_translate", False))
     limit = int(payload.get("limit", 0) or 0)
+    mode = payload.get("mode", "pipeline")
+    if mode not in ("pipeline", "markdown"):
+        mode = "pipeline"
     if not job_id or not src:
         raise HTTPException(400, "требуются поля job и src")
     if not Path(src).exists():
@@ -877,7 +895,7 @@ async def start(payload: dict, background_tasks: BackgroundTasks = None):
         j = _new_job(src)
         j["job_id"] = job_id
         JOBS[job_id] = j
-    background_tasks.add_task(_run_pipeline, j, resume, from_translate, limit)
+    background_tasks.add_task(_run_pipeline, j, resume, from_translate, limit, mode)
     return {"job_id": job_id, "state": "running"}
 
 

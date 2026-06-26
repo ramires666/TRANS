@@ -1,0 +1,1349 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSVTRANS</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d9dee8;
+      --accent: #0b6bcb;
+      --accent-dark: #084f96;
+      --green: #14845f;
+      --amber: #b7791f;
+      --red: #b42318;
+      --soft-blue: #e9f2ff;
+      --soft-green: #eaf7f1;
+      --shadow: 0 12px 36px rgba(20, 31, 45, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .app {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1;
+      font-weight: 760;
+    }
+
+    .subtitle {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+      font-weight: 720;
+    }
+
+    .panel-body {
+      padding: 18px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: #344054;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    input[type="file"],
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      min-height: 42px;
+      padding: 10px 11px;
+      border: 1px solid #cbd3df;
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      outline: none;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+
+    input[type="file"] {
+      padding: 8px;
+    }
+
+    textarea {
+      min-height: 76px;
+      resize: vertical;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.14);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid #cbd3df;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .segmented label {
+      margin: 0;
+    }
+
+    .segmented input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .segmented span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      border-radius: 6px;
+      color: #475467;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .segmented input:checked + span {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .btn {
+      min-height: 42px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 10px 13px;
+      font-weight: 730;
+      cursor: pointer;
+      transition: transform .12s ease, background .15s ease, border-color .15s ease;
+      white-space: nowrap;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-dark);
+    }
+
+    .btn-secondary {
+      background: #fff;
+      color: var(--ink);
+      border-color: #cbd3df;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      color: var(--accent-dark);
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+      transform: none;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      min-height: 72px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: #fff;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .progress-wrap {
+      height: 12px;
+      background: #e8edf5;
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 12px 0 14px;
+      border: 1px solid #d4dbe7;
+    }
+
+    .progress {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--green), var(--accent));
+      transition: width .18s ease;
+    }
+
+    .status-line {
+      min-height: 22px;
+      color: #344054;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .preview-shell {
+      overflow: auto;
+      max-height: 360px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      min-width: 640px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #edf0f5;
+      border-right: 1px solid #edf0f5;
+      padding: 8px 9px;
+      min-width: 120px;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      vertical-align: top;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f8fafc;
+      color: #475467;
+      font-weight: 750;
+    }
+
+    td.chinese {
+      background: var(--soft-blue);
+    }
+
+    .log {
+      height: 174px;
+      overflow: auto;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101828;
+      color: #ecfdf3;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--soft-green);
+      color: #0f6848;
+      font-size: 12px;
+      font-weight: 740;
+    }
+
+    .pill.warn {
+      background: #fff4df;
+      color: var(--amber);
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    @media (max-width: 920px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app {
+        padding: 14px;
+      }
+
+      .row-2,
+      .actions,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .panel-body,
+      .panel-header {
+        padding: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>CSVTRANS</h1>
+        <p class="subtitle">ZH-CN CSV → RU / EN</p>
+      </div>
+      <div class="toolbar">
+        <span id="encodingBadge" class="pill warn">Файл не выбран</span>
+        <button id="downloadBtn" class="btn btn-secondary" type="button" disabled>Скачать CSV</button>
+      </div>
+    </header>
+
+    <section class="layout">
+      <form id="settingsForm" class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Параметры</h2>
+        </div>
+        <div class="panel-body form-grid">
+          <div>
+            <label for="csvFile">CSV файл</label>
+            <input id="csvFile" type="file" accept=".csv,text/csv">
+          </div>
+
+          <div class="row-2">
+            <div>
+              <label>Целевой язык</label>
+              <div class="segmented" role="radiogroup" aria-label="Целевой язык">
+                <label>
+                  <input type="radio" name="targetLang" value="ru" checked>
+                  <span>Русский</span>
+                </label>
+                <label>
+                  <input type="radio" name="targetLang" value="en">
+                  <span>English</span>
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label for="encoding">Кодировка</label>
+              <select id="encoding">
+                <option value="auto">Авто</option>
+                <option value="utf-8">UTF-8</option>
+                <option value="gb18030">GB18030 / GBK</option>
+                <option value="big5">Big5</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row-2">
+            <div>
+              <label for="delimiter">Разделитель</label>
+              <select id="delimiter">
+                <option value="auto">Авто</option>
+                <option value=",">Запятая</option>
+                <option value=";">Точка с запятой</option>
+                <option value="\t">Табуляция</option>
+              </select>
+            </div>
+            <div>
+              <label for="outputMode">Результат</label>
+              <select id="outputMode">
+                <option value="replace">Заменить ячейки</option>
+                <option value="append">Добавить колонку</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row-2">
+            <div>
+              <label for="columnMode">Колонки</label>
+              <select id="columnMode">
+                <option value="auto">Авто: китайские ячейки</option>
+                <option value="columns">Указанные колонки</option>
+                <option value="all">Все непустые ячейки</option>
+              </select>
+            </div>
+            <div>
+              <label for="columns">Список колонок</label>
+              <input id="columns" type="text" placeholder="3, C, D:F" disabled>
+            </div>
+          </div>
+
+          <div>
+            <label for="baseUrl">API base URL</label>
+            <input id="baseUrl" type="text" value="http://127.0.0.1:8080/v1">
+          </div>
+
+          <div class="row-2">
+            <div>
+              <label for="model">Модель</label>
+              <input id="model" type="text" value="Qwen3.6-35B-A3B-UD-Q3_K_M.gguf">
+            </div>
+            <div>
+              <label for="apiKey">API key</label>
+              <input id="apiKey" type="password" value="not-needed" autocomplete="off">
+            </div>
+          </div>
+
+          <div class="row-2">
+            <div>
+              <label for="batchSize">Пакет</label>
+              <input id="batchSize" type="number" min="1" max="80" step="1" value="64">
+            </div>
+            <div>
+              <label for="concurrency">Потоки</label>
+              <input id="concurrency" type="number" min="1" max="4" step="1" value="1">
+            </div>
+          </div>
+
+          <div>
+            <label for="glossary">Глоссарий</label>
+            <textarea id="glossary" placeholder="原点=начальная точка&#10;传感器=датчик"></textarea>
+          </div>
+
+          <div class="actions">
+            <button id="translateBtn" class="btn btn-primary" type="submit" disabled>Начать перевод</button>
+            <button id="stopBtn" class="btn btn-secondary" type="button" disabled>Остановить</button>
+          </div>
+        </div>
+      </form>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Работа</h2>
+          <span id="stateBadge" class="pill">Ожидание</span>
+        </div>
+        <div class="panel-body">
+          <div class="metrics" aria-live="polite">
+            <div class="metric">
+              <strong id="rowCount">0</strong>
+              <span>Строк</span>
+            </div>
+            <div class="metric">
+              <strong id="cellCount">0</strong>
+              <span>Ячеек</span>
+            </div>
+            <div class="metric">
+              <strong id="uniqueCount">0</strong>
+              <span>Уникальных</span>
+            </div>
+            <div class="metric">
+              <strong id="doneCount">0</strong>
+              <span>Готово</span>
+            </div>
+          </div>
+
+          <div class="progress-wrap" aria-label="Прогресс перевода">
+            <div id="progress" class="progress"></div>
+          </div>
+          <div id="statusLine" class="status-line">Выберите CSV файл.</div>
+
+          <div class="preview-shell" style="margin-top:14px;">
+            <table id="previewTable" aria-label="Предпросмотр CSV"></table>
+          </div>
+
+          <div id="log" class="log" style="margin-top:14px;"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      file: document.getElementById("csvFile"),
+      encoding: document.getElementById("encoding"),
+      delimiter: document.getElementById("delimiter"),
+      outputMode: document.getElementById("outputMode"),
+      columnMode: document.getElementById("columnMode"),
+      columns: document.getElementById("columns"),
+      baseUrl: document.getElementById("baseUrl"),
+      model: document.getElementById("model"),
+      apiKey: document.getElementById("apiKey"),
+      batchSize: document.getElementById("batchSize"),
+      concurrency: document.getElementById("concurrency"),
+      glossary: document.getElementById("glossary"),
+      form: document.getElementById("settingsForm"),
+      translateBtn: document.getElementById("translateBtn"),
+      stopBtn: document.getElementById("stopBtn"),
+      downloadBtn: document.getElementById("downloadBtn"),
+      encodingBadge: document.getElementById("encodingBadge"),
+      stateBadge: document.getElementById("stateBadge"),
+      rowCount: document.getElementById("rowCount"),
+      cellCount: document.getElementById("cellCount"),
+      uniqueCount: document.getElementById("uniqueCount"),
+      doneCount: document.getElementById("doneCount"),
+      progress: document.getElementById("progress"),
+      statusLine: document.getElementById("statusLine"),
+      previewTable: document.getElementById("previewTable"),
+      log: document.getElementById("log"),
+    };
+
+    const state = {
+      rows: [],
+      translatedRows: null,
+      fileName: "",
+      detectedEncoding: "",
+      detectedDelimiter: ",",
+      jobs: [],
+      uniqueItems: [],
+      translations: new Map(),
+      abortController: null,
+      errors: [],
+      running: false,
+    };
+
+    const HAN_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+    const API_PATH = "/chat/completions";
+
+    els.columnMode.addEventListener("change", () => {
+      els.columns.disabled = els.columnMode.value !== "columns";
+      refreshJobs();
+    });
+    els.columns.addEventListener("input", refreshJobs);
+    els.outputMode.addEventListener("change", refreshJobs);
+    els.delimiter.addEventListener("change", () => {
+      if (els.file.files[0]) loadSelectedFile();
+    });
+    els.encoding.addEventListener("change", () => {
+      if (els.file.files[0]) loadSelectedFile();
+    });
+    els.file.addEventListener("change", loadSelectedFile);
+    els.form.addEventListener("submit", event => {
+      event.preventDefault();
+      runTranslation();
+    });
+    els.stopBtn.addEventListener("click", () => {
+      if (state.abortController) {
+        state.abortController.abort();
+        logLine("Остановка запрошена.");
+      }
+    });
+    els.downloadBtn.addEventListener("click", downloadCsv);
+
+    function getTargetLang() {
+      return document.querySelector("input[name='targetLang']:checked").value;
+    }
+
+    function setBusy(isBusy) {
+      state.running = isBusy;
+      els.translateBtn.disabled = isBusy || state.rows.length === 0 || state.jobs.length === 0;
+      els.stopBtn.disabled = !isBusy;
+      els.file.disabled = isBusy;
+      els.stateBadge.textContent = isBusy ? "Перевод" : "Ожидание";
+      els.stateBadge.className = isBusy ? "pill warn" : "pill";
+    }
+
+    function logLine(message) {
+      const time = new Date().toLocaleTimeString();
+      els.log.textContent += `[${time}] ${message}\n`;
+      els.log.scrollTop = els.log.scrollHeight;
+    }
+
+    function setStatus(message) {
+      els.statusLine.textContent = message;
+    }
+
+    function setProgress(done, total) {
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      els.doneCount.textContent = String(done);
+      els.progress.style.width = `${pct}%`;
+    }
+
+    async function loadSelectedFile() {
+      const file = els.file.files[0];
+      state.rows = [];
+      state.translatedRows = null;
+      state.jobs = [];
+      state.uniqueItems = [];
+      state.translations.clear();
+      state.errors = [];
+      els.downloadBtn.disabled = true;
+      setProgress(0, 0);
+      clearPreview();
+
+      if (!file) {
+        setStatus("Выберите CSV файл.");
+        updateMetrics();
+        return;
+      }
+
+      try {
+        const buffer = await file.arrayBuffer();
+        const decoded = decodeBuffer(buffer, els.encoding.value);
+        const delimiter = resolveDelimiter(decoded.text, els.delimiter.value);
+        const rows = parseCsv(decoded.text, delimiter);
+
+        state.rows = rows;
+        state.fileName = file.name;
+        state.detectedEncoding = decoded.encoding;
+        state.detectedDelimiter = delimiter;
+
+        els.encodingBadge.textContent = `${decoded.encoding.toUpperCase()} · ${delimiterName(delimiter)}`;
+        els.encodingBadge.className = "pill";
+        logLine(`Файл загружен: ${file.name}`);
+        logLine(`Строк: ${rows.length}, кодировка: ${decoded.encoding}, разделитель: ${delimiterName(delimiter)}`);
+
+        refreshJobs();
+      } catch (error) {
+        setStatus(`Ошибка чтения: ${error.message}`);
+        logLine(`Ошибка чтения: ${error.message}`);
+        updateMetrics();
+      }
+    }
+
+    function decodeBuffer(buffer, selectedEncoding) {
+      const candidates = selectedEncoding === "auto"
+        ? ["utf-8", "gb18030", "big5"]
+        : [selectedEncoding];
+      const attempts = [];
+
+      for (const encoding of candidates) {
+        try {
+          const options = encoding === "utf-8" ? { fatal: true } : {};
+          const text = new TextDecoder(encoding, options).decode(buffer);
+          attempts.push({ encoding, text, score: scoreDecodedText(text) });
+        } catch (error) {
+          attempts.push({ encoding, text: "", score: -1000 });
+        }
+      }
+
+      if (selectedEncoding === "auto") {
+        const utf8 = attempts.find(attempt => attempt.encoding === "utf-8" && attempt.score > -1000);
+        if (utf8 && utf8.text) {
+          return { text: stripBom(utf8.text), encoding: utf8.encoding };
+        }
+      }
+
+      attempts.sort((a, b) => b.score - a.score);
+      const best = attempts[0];
+      if (!best || !best.text) {
+        throw new Error("не удалось декодировать файл");
+      }
+      return { text: stripBom(best.text), encoding: best.encoding };
+    }
+
+    function scoreDecodedText(text) {
+      const replacementCount = (text.match(/\ufffd/g) || []).length;
+      const hanCount = (text.match(/[\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
+      const controlCount = (text.match(/[\u0000-\u0008\u000e-\u001f]/g) || []).length;
+      return hanCount * 4 - replacementCount * 20 - controlCount * 5;
+    }
+
+    function stripBom(text) {
+      return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+    }
+
+    function resolveDelimiter(text, selected) {
+      if (selected !== "auto") {
+        return selected === "\\t" ? "\t" : selected;
+      }
+      return detectDelimiter(text);
+    }
+
+    function detectDelimiter(text) {
+      const candidates = [",", ";", "\t"];
+      const lines = text.split(/\r\n|\n|\r/).slice(0, 30).filter(Boolean);
+      let best = ",";
+      let bestScore = -1;
+
+      for (const delimiter of candidates) {
+        const counts = lines.map(line => countDelimiterOutsideQuotes(line, delimiter));
+        const useful = counts.filter(count => count > 0);
+        if (!useful.length) continue;
+        const average = useful.reduce((sum, count) => sum + count, 0) / useful.length;
+        const variance = useful.reduce((sum, count) => sum + Math.abs(count - average), 0) / useful.length;
+        const score = average * useful.length - variance;
+        if (score > bestScore) {
+          bestScore = score;
+          best = delimiter;
+        }
+      }
+      return best;
+    }
+
+    function countDelimiterOutsideQuotes(line, delimiter) {
+      let count = 0;
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (char === "\"") {
+          if (inQuotes && line[i + 1] === "\"") {
+            i += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === delimiter && !inQuotes) {
+          count += 1;
+        }
+      }
+      return count;
+    }
+
+    function parseCsv(text, delimiter) {
+      const rows = [];
+      let row = [];
+      let field = "";
+      let inQuotes = false;
+
+      for (let i = 0; i < text.length; i += 1) {
+        const char = text[i];
+        const next = text[i + 1];
+
+        if (char === "\"") {
+          if (inQuotes && next === "\"") {
+            field += "\"";
+            i += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+          continue;
+        }
+
+        if (char === delimiter && !inQuotes) {
+          row.push(field);
+          field = "";
+          continue;
+        }
+
+        if ((char === "\n" || char === "\r") && !inQuotes) {
+          row.push(field);
+          rows.push(row);
+          row = [];
+          field = "";
+          if (char === "\r" && next === "\n") {
+            i += 1;
+          }
+          continue;
+        }
+
+        field += char;
+      }
+
+      if (field.length || row.length) {
+        row.push(field);
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function stringifyCsv(rows, delimiter) {
+      return rows.map(row => row.map(value => escapeCsv(value, delimiter)).join(delimiter)).join("\r\n");
+    }
+
+    function escapeCsv(value, delimiter) {
+      const text = value == null ? "" : String(value);
+      const mustQuote = text.includes("\"") || text.includes("\n") || text.includes("\r") || text.includes(delimiter);
+      if (!mustQuote) return text;
+      return `"${text.replace(/"/g, "\"\"")}"`;
+    }
+
+    function delimiterName(delimiter) {
+      if (delimiter === "\t") return "табуляция";
+      if (delimiter === ";") return "точка с запятой";
+      return "запятая";
+    }
+
+    function refreshJobs() {
+      state.jobs = buildJobs(state.rows);
+      const uniqueMap = new Map();
+
+      for (const job of state.jobs) {
+        if (!uniqueMap.has(job.text)) {
+          uniqueMap.set(job.text, { text: job.text, jobs: [] });
+        }
+        uniqueMap.get(job.text).jobs.push(job);
+      }
+
+      state.uniqueItems = [...uniqueMap.values()];
+      renderPreview(state.rows);
+      updateMetrics();
+      setProgress(0, state.uniqueItems.length);
+      setStatus(state.rows.length
+        ? `К переводу: ${state.jobs.length} ячеек, ${state.uniqueItems.length} уникальных значений.`
+        : "Выберите CSV файл.");
+      els.translateBtn.disabled = state.running || state.rows.length === 0 || state.jobs.length === 0;
+    }
+
+    function buildJobs(rows) {
+      const mode = els.columnMode.value;
+      const selectedColumns = parseColumnSpec(els.columns.value);
+      const jobs = [];
+
+      rows.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          const text = String(cell || "").trim();
+          if (!text) return;
+
+          let shouldTranslate = false;
+          if (mode === "auto") {
+            shouldTranslate = HAN_RE.test(text);
+          } else if (mode === "columns") {
+            shouldTranslate = selectedColumns.has(colIndex);
+          } else if (mode === "all") {
+            shouldTranslate = true;
+          }
+
+          if (shouldTranslate) {
+            jobs.push({ rowIndex, colIndex, text: cell });
+          }
+        });
+      });
+
+      return jobs;
+    }
+
+    function parseColumnSpec(value) {
+      const result = new Set();
+      const parts = value.split(/[,\s]+/).map(item => item.trim()).filter(Boolean);
+
+      for (const part of parts) {
+        const rangeMatch = part.match(/^([A-Za-z]+|\d+)\s*[:-]\s*([A-Za-z]+|\d+)$/);
+        if (rangeMatch) {
+          const start = columnTokenToIndex(rangeMatch[1]);
+          const end = columnTokenToIndex(rangeMatch[2]);
+          if (start == null || end == null) continue;
+          const min = Math.min(start, end);
+          const max = Math.max(start, end);
+          for (let index = min; index <= max; index += 1) {
+            result.add(index);
+          }
+        } else {
+          const index = columnTokenToIndex(part);
+          if (index != null) {
+            result.add(index);
+          }
+        }
+      }
+
+      return result;
+    }
+
+    function columnTokenToIndex(token) {
+      if (/^\d+$/.test(token)) {
+        const number = Number(token);
+        return Number.isFinite(number) && number > 0 ? number - 1 : null;
+      }
+      if (/^[A-Za-z]+$/.test(token)) {
+        let number = 0;
+        for (const char of token.toUpperCase()) {
+          number = number * 26 + (char.charCodeAt(0) - 64);
+        }
+        return number - 1;
+      }
+      return null;
+    }
+
+    function updateMetrics() {
+      els.rowCount.textContent = String(state.rows.length);
+      els.cellCount.textContent = String(state.jobs.length);
+      els.uniqueCount.textContent = String(state.uniqueItems.length);
+    }
+
+    function clearPreview() {
+      els.previewTable.innerHTML = "";
+    }
+
+    function renderPreview(rows) {
+      const limitRows = Math.min(rows.length, 12);
+      const maxCols = Math.min(Math.max(1, ...rows.slice(0, limitRows).map(row => row.length)), 10);
+      const selected = new Set(state.jobs.map(job => `${job.rowIndex}:${job.colIndex}`));
+      let html = "<thead><tr>";
+      for (let col = 0; col < maxCols; col += 1) {
+        html += `<th>${escapeHtml(indexToColumnName(col))}</th>`;
+      }
+      html += "</tr></thead><tbody>";
+
+      for (let rowIndex = 0; rowIndex < limitRows; rowIndex += 1) {
+        html += "<tr>";
+        for (let colIndex = 0; colIndex < maxCols; colIndex += 1) {
+          const value = rows[rowIndex]?.[colIndex] || "";
+          const className = selected.has(`${rowIndex}:${colIndex}`) ? " class=\"chinese\"" : "";
+          html += `<td${className} title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
+        }
+        html += "</tr>";
+      }
+
+      html += "</tbody>";
+      els.previewTable.innerHTML = html;
+    }
+
+    function indexToColumnName(index) {
+      let number = index + 1;
+      let name = "";
+      while (number > 0) {
+        const remainder = (number - 1) % 26;
+        name = String.fromCharCode(65 + remainder) + name;
+        number = Math.floor((number - 1) / 26);
+      }
+      return name;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function makeBatches(items, batchSize) {
+      const batches = [];
+      let batch = [];
+      let chars = 0;
+      const maxChars = 6000;
+
+      for (const item of items) {
+        const size = item.text.length;
+        if (batch.length && (batch.length >= batchSize || chars + size > maxChars)) {
+          batches.push(batch);
+          batch = [];
+          chars = 0;
+        }
+        batch.push(item);
+        chars += size;
+      }
+
+      if (batch.length) {
+        batches.push(batch);
+      }
+      return batches;
+    }
+
+    async function runTranslation() {
+      if (!state.rows.length || !state.uniqueItems.length || state.running) return;
+
+      const batchSize = clampInt(els.batchSize.value, 1, 80, 64);
+      const concurrency = clampInt(els.concurrency.value, 1, 4, 1);
+      const batches = makeBatches(state.uniqueItems, batchSize);
+      state.abortController = new AbortController();
+      state.translations.clear();
+      state.errors = [];
+      setBusy(true);
+      setProgress(0, state.uniqueItems.length);
+      setStatus(`Перевод: 0 / ${state.uniqueItems.length}`);
+      logLine(`Старт: ${batches.length} пакетов, потоков: ${concurrency}`);
+
+      let batchIndex = 0;
+      let done = 0;
+
+      async function worker(workerId) {
+        while (batchIndex < batches.length) {
+          const currentIndex = batchIndex;
+          batchIndex += 1;
+          const batch = batches[currentIndex];
+          try {
+            const translations = await translateBatch(batch.map(item => item.text), state.abortController.signal);
+            translations.forEach((translation, index) => {
+              state.translations.set(batch[index].text, translation);
+            });
+            done += batch.length;
+            setProgress(done, state.uniqueItems.length);
+            setStatus(`Перевод: ${done} / ${state.uniqueItems.length}`);
+            logLine(`Пакет ${currentIndex + 1}/${batches.length} готов, поток ${workerId}`);
+          } catch (error) {
+            if (error.name === "AbortError") throw error;
+            logLine(`Пакет ${currentIndex + 1}: ${error.message}`);
+            for (const item of batch) {
+              try {
+                const fallback = await translateSingle(item.text, state.abortController.signal, true);
+                if (needsHanRetry(item.text, fallback)) {
+                  throw new Error("LLM оставила китайский текст в ответе");
+                }
+                state.translations.set(item.text, fallback);
+              } catch (singleError) {
+                state.translations.set(item.text, item.text);
+                state.errors.push({ text: item.text, error: singleError.message });
+                logLine(`Ошибка ячейки: ${singleError.message}`);
+              }
+              done += 1;
+              setProgress(done, state.uniqueItems.length);
+              setStatus(`Перевод: ${done} / ${state.uniqueItems.length}`);
+            }
+          }
+        }
+      }
+
+      try {
+        await Promise.all(Array.from({ length: concurrency }, (_, index) => worker(index + 1)));
+        state.translatedRows = applyTranslations();
+        els.downloadBtn.disabled = false;
+        setStatus(state.errors.length ? `Готово с ошибками: ${state.errors.length}` : "Готово.");
+        logLine(state.errors.length ? `Готово. Ошибок: ${state.errors.length}` : "Готово без ошибок.");
+      } catch (error) {
+        if (error.name === "AbortError") {
+          setStatus("Остановлено.");
+          logLine("Перевод остановлен.");
+        } else {
+          setStatus(`Ошибка: ${error.message}`);
+          logLine(`Ошибка: ${error.message}`);
+        }
+      } finally {
+        state.abortController = null;
+        setBusy(false);
+      }
+    }
+
+    function clampInt(value, min, max, fallback) {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.min(max, Math.max(min, parsed));
+    }
+
+    async function translateBatch(texts, signal) {
+      const content = await callChatApi({
+        messages: buildBatchMessages(texts),
+        maxTokens: estimateMaxTokens(texts),
+        signal,
+      });
+      const parsed = parseJsonArray(content);
+      if (!Array.isArray(parsed) || parsed.length !== texts.length) {
+        throw new Error("API вернул ответ не в формате JSON массива");
+      }
+      const translations = parsed.map((value, index) => cleanTranslation(value, texts[index]));
+      return Promise.all(translations.map(async (translation, index) => {
+        if (!needsHanRetry(texts[index], translation)) {
+          return translation;
+        }
+        const retry = await translateSingle(texts[index], signal, true);
+        if (needsHanRetry(texts[index], retry)) {
+          throw new Error("LLM оставила китайский текст в ответе");
+        }
+        return retry;
+      }));
+    }
+
+    async function translateSingle(text, signal, strict = false) {
+      const content = await callChatApi({
+        messages: buildSingleMessages(text, strict),
+        maxTokens: Math.max(256, Math.min(1200, text.length * 3)),
+        signal,
+      });
+      return cleanTranslation(content, text);
+    }
+
+    async function callChatApi({ messages, maxTokens, signal }) {
+      const baseUrl = els.baseUrl.value.trim().replace(/\/+$/, "");
+      const model = els.model.value.trim();
+      const apiKey = els.apiKey.value || "not-needed";
+
+      if (!baseUrl) throw new Error("не указан API base URL");
+      if (!model) throw new Error("не указана модель");
+
+      const response = await fetch(`${baseUrl}${API_PATH}`, {
+        method: "POST",
+        signal,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.2,
+          top_p: 0.9,
+          max_tokens: maxTokens,
+          chat_template_kwargs: {
+            enable_thinking: false,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`HTTP ${response.status}: ${text.slice(0, 240)}`);
+      }
+
+      const data = await response.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) {
+        throw new Error("пустой ответ API");
+      }
+      return content.trim();
+    }
+
+    function buildBatchMessages(texts) {
+      const target = getTargetLang() === "ru" ? "Russian" : "English";
+      const glossary = normalizeGlossary(els.glossary.value);
+      return [
+        {
+          role: "system",
+          content: [
+            "You are a professional technical translator.",
+            `Translate Simplified Chinese into ${target}.`,
+            "The CSV contains comments from a PLC/HMI industrial automation project.",
+            "Use PLC automation context: sensors, cylinders, axes, valves, commands, states, alarms, HMI labels, registers and interlocks.",
+            "Return only a valid JSON array of strings.",
+            "The output array length and order must match the input array.",
+            "Translate every Chinese word, including Chinese embedded inside PLC signal names, alarm names, command/status strings and strings with #, _, /, -, parentheses.",
+            "Preserve PLC identifiers, addresses, register names, model names, numbers, punctuation, separators, line breaks and leading spaces, but translate the Chinese fragments around them.",
+            "Use domain terms for Russian: 指令=команда, 运行中=выполняется, 运行完成=выполнено, 工位=рабочая позиция or станция, 页=страница, 行=строка, 属性=атрибуты, 模板=шаблон, 设定=настройка.",
+            "Use domain terms for English: 指令=command, 运行中=running, 运行完成=run complete, 工位=station or work position, 页=page, 行=row, 属性=attributes, 模板=template, 设定=setting.",
+            "Examples for Russian: 27#指令_运行完成 -> 27#команда_выполнение завершено; KV-D30 19页第1行属性 -> KV-D30 страница 19, строка 1, атрибуты.",
+            "Examples for English: 27#指令_运行完成 -> 27#command_run complete; KV-D30 19页第1行属性 -> KV-D30 page 19 row 1 attributes.",
+            "Do not leave Simplified Chinese characters in the output unless the source is an untranslatable proper name.",
+            "Do not add explanations, markdown or comments.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: [
+            glossary ? `Glossary:\n${glossary}\n` : "",
+            "Input JSON array:",
+            JSON.stringify(texts),
+          ].join("\n"),
+        },
+      ];
+    }
+
+    function buildSingleMessages(text, strict = false) {
+      const target = getTargetLang() === "ru" ? "Russian" : "English";
+      const glossary = normalizeGlossary(els.glossary.value);
+      return [
+        {
+          role: "system",
+          content: [
+            "You are a professional technical translator.",
+            `Translate Simplified Chinese into ${target}.`,
+            "The CSV contains comments from a PLC/HMI industrial automation project.",
+            "Use PLC automation context: sensors, cylinders, axes, valves, commands, states, alarms, HMI labels, registers and interlocks.",
+            "Return only the translated text.",
+            "Translate every Chinese word, including Chinese embedded inside PLC signal names, alarm names, command/status strings and strings with #, _, /, -, parentheses.",
+            "Preserve PLC identifiers, addresses, register names, model names, numbers, punctuation, separators, line breaks and leading spaces, but translate the Chinese fragments around them.",
+            "Use domain terms for Russian: 指令=команда, 运行中=выполняется, 运行完成=выполнено, 工位=рабочая позиция or станция, 页=страница, 行=строка, 属性=атрибуты, 模板=шаблон, 设定=настройка.",
+            "Use domain terms for English: 指令=command, 运行中=running, 运行完成=run complete, 工位=station or work position, 页=page, 行=row, 属性=attributes, 模板=template, 设定=setting.",
+            "Do not leave Simplified Chinese characters in the output unless the source is an untranslatable proper name.",
+            "Do not add explanations, markdown or comments.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: [
+            glossary ? `Glossary:\n${glossary}\n` : "",
+            strict ? "Strict retry: the previous answer still contained Chinese characters. Translate all Chinese fragments now while preserving only non-Chinese codes, numbers and separators.\n" : "",
+            "Text:",
+            text,
+          ].join("\n"),
+        },
+      ];
+    }
+
+    function normalizeGlossary(text) {
+      return text
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .slice(0, 200)
+        .join("\n");
+    }
+
+    function estimateMaxTokens(texts) {
+      const chars = texts.reduce((sum, text) => sum + text.length, 0);
+      return Math.max(512, Math.min(4096, Math.ceil(chars * 2.4) + 300));
+    }
+
+    function containsHan(text) {
+      return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(String(text || ""));
+    }
+
+    function needsHanRetry(source, translation) {
+      return containsHan(source) && containsHan(translation);
+    }
+
+    function parseJsonArray(content) {
+      const withoutFence = content
+        .replace(/^```(?:json)?/i, "")
+        .replace(/```$/i, "")
+        .trim();
+      try {
+        return JSON.parse(withoutFence);
+      } catch (error) {
+        const start = withoutFence.indexOf("[");
+        const end = withoutFence.lastIndexOf("]");
+        if (start >= 0 && end > start) {
+          return JSON.parse(withoutFence.slice(start, end + 1));
+        }
+        throw error;
+      }
+    }
+
+    function cleanTranslation(value, fallback) {
+      let text = value == null ? "" : String(value);
+      text = text.trim();
+      text = text.replace(/^```(?:json|text)?/i, "").replace(/```$/i, "").trim();
+      if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
+        text = text.slice(1, -1).trim();
+      }
+      return text || fallback;
+    }
+
+    function applyTranslations() {
+      const rows = state.rows.map(row => row.slice());
+      const byRow = new Map();
+
+      for (const job of state.jobs) {
+        const translation = state.translations.get(job.text) || job.text;
+        if (els.outputMode.value === "append") {
+          if (!byRow.has(job.rowIndex)) byRow.set(job.rowIndex, []);
+          byRow.get(job.rowIndex).push(translation);
+        } else {
+          rows[job.rowIndex][job.colIndex] = translation;
+        }
+      }
+
+      if (els.outputMode.value === "append") {
+        rows.forEach((row, rowIndex) => {
+          row.push((byRow.get(rowIndex) || []).join(" | "));
+        });
+      }
+
+      return rows;
+    }
+
+    function downloadCsv() {
+      const rows = state.translatedRows || applyTranslations();
+      const csv = "\ufeff" + stringifyCsv(rows, state.detectedDelimiter || ",");
+      const target = getTargetLang();
+      const baseName = state.fileName.replace(/\.csv$/i, "") || "translated";
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${baseName}_${target}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      logLine(`Файл сохранён: ${link.download}`);
+    }
+
+    updateMetrics();
+    setBusy(false);
+  </script>
+</body>
+</html>

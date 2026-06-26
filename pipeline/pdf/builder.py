@@ -7,11 +7,63 @@ from pathlib import Path
 
 import fitz
 
-from pipeline.config.loader import (ensure_dirs, load_config, resolve_path,
-                                     setup_logger)
+from pipeline.config.loader import (ROOT, ensure_dirs, load_config,
+                                     resolve_path, setup_logger)
 from pipeline.fonts.fonts import find_target_font
 from pipeline.fonts.matcher import match_font, describe_match
 from pipeline.io.artifacts import load_json
+
+
+def _overlay_image_translations(page, cfg: dict, target_font: str, logger,
+                                 cache_path: str | None = None):
+    """Опционально: OCR + перевод текста в изображениях на странице.
+
+    Добавляет переведённые подписи под изображения, если в config включён
+    ``enable_vision_ocr``. Безопасен при отсутствии vision-модели/PIL.
+    """
+    if not cfg.get("enable_vision_ocr"):
+        return
+    try:
+        from pipeline.vision.ocr import VisionTranslator, VisionCache
+        from PIL import Image
+    except Exception as e:
+        logger.warning("Vision OCR недоступен: %s", e)
+        return
+
+    src_lang = cfg.get("source_lang", "zh")
+    tgt_lang = cfg.get("target_lang", "ru")
+    translator = VisionTranslator(cfg)
+    if not translator.enabled:
+        logger.warning("Vision OCR не настроен: задайте vision_llm_model")
+        return
+
+    cache = VisionCache(cache_path) if cache_path else None
+    try:
+        doc = page.parent
+        for img in page.get_images(full=True):
+            xref = img[0]
+            try:
+                pix = fitz.Pixmap(doc, xref)
+                if pix.n > 4:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                translated = translator.translate_image(pil_img, src_lang, tgt_lang, cache)
+                if not translated:
+                    continue
+                rects = page.get_image_rects(xref)
+                if not rects:
+                    continue
+                r = rects[0]
+                label_rect = fitz.Rect(r.x0, r.y1 + 2, r.x1, r.y1 + 20)
+                page.insert_textbox(label_rect, translated, fontname="tgt",
+                                    fontfile=target_font, fontsize=6,
+                                    color=(0.3, 0.3, 0.3))
+            except Exception as e:
+                logger.debug("Vision OCR для xref %d не удался: %s", xref, e)
+                continue
+    finally:
+        if cache:
+            cache.close()
 
 
 def _norm(s: str) -> str:
@@ -32,20 +84,24 @@ def _build_heading_lookup(segments: list[dict]) -> dict[str, str]:
     return out
 
 
-def _normalize_markers(text: str) -> str:
-    """Нормализует маркеры списка □ (U+25A1) -> • в начале строк.
+def _normalize_markers(text: str, cfg: dict | None = None) -> str:
+    """Нормализует маркеры списков в стандартный bullet для любого языка.
 
-    Защита от закэшированных переводов, где LLM мог скопировать □ из
-    оригинала. DejaVuSans имеет глиф для □, но валидатор и эстетика
-    требуют •.
-
-    Также удаляет PUA-символы (U+F000–U+F8FF) — иконки из оригинального
-    шрифта, которые целевой шрифт не может отобразить (рендерятся как \\x00).
+    Конфигурируется через ``bullet_chars``, ``bullet_replace`` и ``remove_pua``
+    в config.yaml. По умолчанию обрабатывает широкий набор bullet-символов.
     """
-    text = re.sub(r"(?m)(^\s*)□", r"\1•", text)
-    # PUA: иконки/символы из кастомных шрифтов оригинала
-    text = re.sub(r"[\uf000-\uf8ff]", "", text)
-    # убираем возможные двойные пробелы после удаления
+    cfg = cfg or {}
+    chars = cfg.get("bullet_chars", "•●○◌◦◆◇■□▪▫▶▷◀◁▲△▼▽◄►◅▻")
+    replace = cfg.get("bullet_replace", "•") or "•"
+    remove_pua = cfg.get("remove_pua", True)
+
+    if chars:
+        # экранируем для регулярного выражения
+        escaped = "".join(c if c not in r"\^$.*+?{}[]|()" else "\\" + c for c in chars)
+        text = re.sub(rf"(?m)(^\s*)[{escaped}]", r"\1" + replace, text)
+    if remove_pua:
+        text = re.sub(r"[\uf000-\uf8ff]", "", text)
+    # Убираем возможные двойные пробелы после удаления
     text = re.sub(r"  +", " ", text).strip()
     return text
 
@@ -260,7 +316,7 @@ def _plan_font_sizes(page, page_segs: list[dict], cfg: dict,
         ru = (seg.get("ru") or "").strip()
         if not ru:
             continue
-        ru = _normalize_markers(ru)
+        ru = _normalize_markers(ru, cfg)
         bb = seg["bbox"]
         rect = fitz.Rect(bb[0], bb[1], bb[2], bb[3])
         if rect.is_empty or rect.width < 1 or rect.height < 1:
@@ -373,7 +429,7 @@ def build(cfg: dict, logger, segments_ru_path: str | None = None,
             ru = (seg.get("ru") or "").strip()
             if not ru:
                 continue
-            ru = _normalize_markers(ru)
+            ru = _normalize_markers(ru, cfg)
             bb = seg["bbox"]
             rect = fitz.Rect(bb[0], bb[1], bb[2], bb[3])
             if rect.is_empty or rect.width < 1 or rect.height < 1:
@@ -401,7 +457,7 @@ def build(cfg: dict, logger, segments_ru_path: str | None = None,
             if not ru:
                 skipped_empty += 1
                 continue
-            ru = _normalize_markers(ru)
+            ru = _normalize_markers(ru, cfg)
             bb = seg["bbox"]
             rect = fitz.Rect(bb[0], bb[1], bb[2], bb[3])
 
@@ -430,6 +486,15 @@ def build(cfg: dict, logger, segments_ru_path: str | None = None,
                 overflows += 1
             total_blocks += 1
 
+        # Опциональный OCR текстa в изображениях
+        try:
+            from pipeline.io.artifacts import source_hash
+            sh = source_hash(str(src_pdf))
+            vision_cache = str(ROOT / cfg.get("tmp_dir", "intermediate") / sh / "vision_cache.db")
+            _overlay_image_translations(page, cfg, font_path, logger, vision_cache)
+        except Exception as e:
+            logger.debug("Vision OCR на странице %d не удался: %s", pno + 1, e)
+
         if (pno + 1) % 20 == 0:
             logger.info("  build page %d/%d", pno + 1, doc.page_count)
 
@@ -443,9 +508,15 @@ def build(cfg: dict, logger, segments_ru_path: str | None = None,
 
     md = dict(doc.metadata or {})
     md_cfg = cfg.get("metadata", {})
+    src_doc = fitz.open(str(src_pdf))
+    src_md = dict(src_doc.metadata or {})
+    src_doc.close()
+
     for k in ("title", "author", "subject", "keywords"):
         if md_cfg.get(k):
             md[k] = md_cfg[k]
+        elif not md.get(k) and src_md.get(k):
+            md[k] = src_md[k]
     try:
         doc.set_metadata(md)
     except Exception as e:

@@ -53,6 +53,7 @@ def artifact_paths(cfg: dict, src_hash: str) -> dict[str, Path]:
         "parse": wd / "parse.json",
         "segments": wd / "segments.json",
         "segments_ru": wd / "segments_ru.json",
+        "pages_md": wd / "pages_md.json",
         "cache_db": wd / "translations.db",
         "errors": ROOT / cfg.get("log_dir", "log") / "errors.jsonl",
     }

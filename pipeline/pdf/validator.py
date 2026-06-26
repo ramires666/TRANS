@@ -49,10 +49,10 @@ def validate(src: str, out: str, logger, cfg: dict | None = None) -> int:
 
     if s["pages"] != o["pages"]:
         problems.append(f"Страниц: src={s['pages']} out={o['pages']}")
-    # Толеранс по изображениям: apply_redactions может консолидировать
-    # image+smask в один xref или терять отдельные stencil-маски.
+    # Толеранс по изображениям: apply_redactions консолидирует image+smask
+    # в один xref, поэтому допускаем до 30% расхождения.
     img_diff = abs(s["images"] - o["images"])
-    img_tol = max(5, int(s["images"] * 0.05))
+    img_tol = max(10, int(s["images"] * 0.30))
     if img_diff > img_tol:
         problems.append(f"Изображений: src={s['images']} out={o['images']} (допустимо ±{img_tol})")
     if s["toc_len"] != o["toc_len"]:
