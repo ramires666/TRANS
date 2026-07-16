@@ -4,13 +4,40 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pipeline.config.loader import ROOT
+import fitz
+
+from pipeline.config.loader import ROOT, resolve_path
 
 
-def find_target_font(configured: str | None = None) -> str:
+_LANG_GLYPHS = {
+    "ru": "АяЁё",
+    "en": "Az",
+    "de": "ÄäÖöÜüß",
+    "fr": "ÀàÇçÉéŒœ",
+    "es": "ÁáÉéÍíÑñÓóÚúÜü",
+}
+
+
+def _supports_target(path: Path, target_lang: str) -> bool:
+    sample = _LANG_GLYPHS.get(target_lang, "Az")
+    try:
+        font = fitz.Font(fontfile=str(path))
+        return all(font.has_glyph(ord(ch)) for ch in sample)
+    except Exception:
+        return False
+
+
+def find_target_font(configured: str | None = None,
+                     target_lang: str = "ru") -> str:
     """Возвращает путь к TTF-шрифту с поддержкой глифов целевого языка."""
-    if configured and Path(configured).exists():
-        return str(Path(configured).resolve())
+    if configured:
+        configured_path = resolve_path(configured)
+        if not configured_path.exists():
+            raise FileNotFoundError(f"Настроенный target_font не найден: {configured_path}")
+        if not _supports_target(configured_path, target_lang):
+            raise ValueError(
+                f"Шрифт {configured_path} не покрывает язык '{target_lang}'")
+        return str(configured_path.resolve())
 
     candidates: list[Path] = []
 
@@ -31,9 +58,9 @@ def find_target_font(configured: str | None = None) -> str:
     candidates.append(ROOT / "assets" / "DejaVuSans.ttf")
 
     for c in candidates:
-        if c.exists():
+        if c.exists() and _supports_target(c, target_lang):
             return str(c.resolve())
     raise FileNotFoundError(
-        "TTF-шрифт с поддержкой целевого языка не найден. "
+        f"TTF-шрифт с поддержкой языка '{target_lang}' не найден. "
         "Укажите target_font в config/config.yaml или положите assets/DejaVuSans.ttf"
     )

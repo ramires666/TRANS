@@ -25,19 +25,42 @@ llm_api_key: "not-needed"
 llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
 enable_thinking: false
 max_tokens: 4096
-temperature: 0.2
+temperature: 0.1
 top_p: 0.9
 request_timeout: 300
 
-# Vision LLM (OpenAI-совместимый эндпоинт) — для OCR/изображений
-# Если не задан — используется llm_base_url / llm_model
+# Пакетный перевод резко уменьшает число LLM-вызовов. При ошибке JSON или
+# валидации повторяются только проблемные элементы пакета.
+llm_batch_max_items: 24
+llm_batch_max_chars: 4000
+translation_max_attempts: 3
+
+# Просить LLM укладывать перевод в исходный текстовый блок при читаемом
+# минимальном кегле. Ограничение мягкое: если без потери смысла сократить
+# нельзя, полный перевод всё равно сохраняется и попадёт в приложение.
+translation_layout_budget: true
+translation_layout_fill: 0.90
+translation_avg_char_width: 0.56
+
+# Vision LLM (OpenAI-совместимый эндпоинт) — только для отдельного
+# постпроцесса изображений. Модель должна быть указана явно: обычная text LLM
+# намеренно не используется как fallback. Пустой base_url наследует llm_base_url.
 vision_llm_base_url: ""
 vision_llm_api_key: ""
-vision_llm_model: ""  # например: "llava", "qwen-vl", "gpt-4-vision"
+# Текущая локальная Qwen проверена live-smoke как multimodal. Это явная
+# настройка: основной pipeline всё равно не вызывает vision автоматически.
+vision_llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
 vision_max_tokens: 2048
-vision_temperature: 0.1
+vision_temperature: 0.0
 vision_top_p: 0.9
 vision_request_timeout: 600
+vision_confidence_threshold: 0.65
+vision_min_image_size: 64
+vision_min_fontsize: 12
+vision_overlay_padding: 3
+vision_bbox_padding_ratio: 0.04  # внешний запас вокруг tight OCR bbox
+vision_text_align: "center"  # center | left
+vision_cache_path: "intermediate/vision_translations.db"
 
 # Параллелизм
 workers: 2
@@ -57,7 +80,7 @@ target_font: ""
 
 # Подбирать ближайший похожий шрифт под оригинал (по семейству/весу/стилю).
 # Берёт поле 'font' каждого сегмента и ищет TTF с глифами target_lang.
-match_fonts: false
+match_fonts: true
 
 # Промежуточные файлы (устаревшие поля; реальные пути лежат в intermediate/<hash>/)
 parse_path: "intermediate/parse.json"
@@ -69,8 +92,24 @@ log_path: "log/translate.log"
 max_segment_chars: 1500
 
 # Сборка
-builder_min_fontsize: 6.0
+builder_min_fontsize: 8.5
+builder_table_min_fontsize: 7.5
+builder_caption_min_fontsize: 8.0
+builder_heading_min_fontsize: 9.0
 builder_default_fontsize: 10.0
+builder_group_max_shrink: 1.0
+
+# Если полный перевод не помещается даже при читаемом минимуме, исходная
+# область получает маркер [T...], а полный текст переносится в приложение.
+# Так текст не исчезает и не превращается в микрошрифт.
+builder_overflow_policy: "appendix"  # appendix | keep_source
+builder_overflow_fontsize: 9.0
+
+# Автопроверка должна учитывать минимальный кегль таблиц и отклонять остаточный
+# извлекаемый китайский текст. Текст внутри растровых схем проверяется отдельным
+# image-overlay отчётом.
+validator_min_readable_fontsize: 7.5
+validator_max_residual_source_chars: 0
 
 # Нормализация маркеров списков для любого языка.
 # bullet_chars: строка с юникодными символами-заменителями
@@ -80,6 +119,9 @@ bullet_replace: "•"
 remove_pua: true
 
 # OCR/перевод текста в изображениях
+# Устаревший флаг оставлен для совместимости. Перевод надписей внутри
+# изображений запускается отдельным необязательным постпроцессом после
+# просмотра основного PDF и не включается в обычную сборку.
 enable_vision_ocr: false
 
 # Режим Markdown-перевода (второй опциональный вариант)

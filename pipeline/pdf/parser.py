@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+from collections import defaultdict
 
 import fitz
 
@@ -48,44 +48,70 @@ def _extract_block(block: dict) -> dict:
     }
 
 
-def _detect_tables_lines(drawings: list[dict]) -> list[dict]:
-    h_lines, v_lines = [], []
-    for d in drawings:
-        for item in d.get("items", []):
-            if item[0] == "l":
-                p1, p2 = item[1], item[2]
-                dx, dy = p2.x - p1.x, p2.y - p1.y
-                if abs(dy) < 0.5 and abs(dx) > 2:
-                    h_lines.append((p1.y, p1.x, p2.x))
-                elif abs(dx) < 0.5 and abs(dy) > 2:
-                    v_lines.append((p1.x, p1.y, p2.y))
-            elif item[0] == "re":
-                r = item[1]
-                if (r.x1 - r.x0) > 2 and (r.y1 - r.y0) < 1.5:
-                    h_lines.append((r.y0, r.x0, r.x1))
-                elif (r.y1 - r.y0) > 2 and (r.x1 - r.x0) < 1.5:
-                    v_lines.append((r.x0, r.y0, r.y1))
-    if len(h_lines) < 2 or len(v_lines) < 2:
-        return []
-    h_ys = sorted({round(y, 1) for y, _, _ in h_lines})
-    v_xs = sorted({round(x, 1) for x, _, _ in v_lines})
-    if len(h_ys) < 2 or len(v_xs) < 2:
-        return []
-    out = []
-    used: set[tuple[int, int]] = set()
-    for i in range(len(h_ys) - 1):
-        y0, y1 = h_ys[i], h_ys[i + 1]
-        if y1 - y0 < 4:
+def _rect_key(value) -> tuple[float, float, float, float]:
+    """Stable key for matching ``Table.cells`` with ``Table.rows`` cells."""
+    rect = fitz.Rect(value)
+    return tuple(round(float(v), 4) for v in (rect.x0, rect.y0, rect.x1, rect.y1))
+
+
+def _table_to_dict(table) -> dict:
+    """Serialize a PyMuPDF table without assuming flat-cell ordering.
+
+    ``Table.cells`` is not guaranteed to be row-major. Row and column metadata
+    therefore comes from ``Table.rows`` and is joined back to the flat cells by
+    rectangle coordinates. If an older API exposes only flat cells, their
+    row/column values intentionally remain ``None``.
+    """
+    records: dict[int, dict] = {}
+    indices_by_rect: dict[tuple[float, float, float, float], list[int]] = defaultdict(list)
+
+    flat_cells = list(getattr(table, "cells", None) or [])
+    for index, cell in enumerate(flat_cells):
+        if cell is None:
             continue
-        for j in range(len(v_xs) - 1):
-            x0, x1 = v_xs[j], v_xs[j + 1]
-            if x1 - x0 < 4:
+        bbox = _rect(fitz.Rect(cell))
+        records[index] = {
+            "index": index,
+            "bbox": bbox,
+            "row": None,
+            "col": None,
+        }
+        indices_by_rect[_rect_key(cell)].append(index)
+
+    rows = list(getattr(table, "rows", None) or [])
+    next_index = len(flat_cells)
+    for row_index, row in enumerate(rows):
+        for col_index, cell in enumerate(getattr(row, "cells", None) or []):
+            if cell is None:
                 continue
-            if (i, j) in used:
+            key = _rect_key(cell)
+            matching = indices_by_rect.get(key, [])
+            index = next((i for i in matching
+                          if records[i]["row"] is None), None)
+            if index is None and matching:
+                # A merged cell can be referenced by more than one row slot.
+                # Keep its first physical position instead of duplicating it.
                 continue
-            used.add((i, j))
-            out.append({"bbox": [x0, y0, x1, y1], "method": "lines"})
-    return out
+            if index is None:
+                index = next_index
+                next_index += 1
+                records[index] = {
+                    "index": index,
+                    "bbox": _rect(fitz.Rect(cell)),
+                    "row": None,
+                    "col": None,
+                }
+                indices_by_rect[key].append(index)
+            records[index]["row"] = row_index
+            records[index]["col"] = col_index
+
+    return {
+        "bbox": _rect(fitz.Rect(table.bbox)),
+        "method": "find_tables",
+        "row_count": int(getattr(table, "row_count", len(rows)) or 0),
+        "col_count": int(getattr(table, "col_count", 0) or 0),
+        "cells": [records[i] for i in sorted(records)],
+    }
 
 
 def parse_pdf(pdf_path: str, cfg: dict, logger) -> dict:
@@ -118,31 +144,32 @@ def parse_pdf(pdf_path: str, cfg: dict, logger) -> dict:
                 bbox = None
             images.append({"xref": xref, "bbox": bbox, "width": img[2], "height": img[3]})
 
-        drawings = []
+        raw_drawings = []
         try:
-            for dr in page.get_drawings():
-                drawings.append({
-                    "rect": _rect(dr.get("rect", fitz.Rect())),
-                    "fill": bool(dr.get("fill")),
-                    "color": dr.get("color"),
-                    "items_count": len(dr.get("items", [])),
-                })
+            # Reuse these paths in find_tables: page.get_drawings() is one of
+            # the most expensive page-level operations and should run once.
+            raw_drawings = list(page.get_drawings())
         except Exception:
             pass
 
-        tables_ft = []
+        tables = []
         try:
-            for t in page.find_tables().tables:
-                tables_ft.append({"bbox": _rect(t.bbox), "method": "find_tables"})
+            finder = page.find_tables(paths=raw_drawings)
+            for table in finder.tables:
+                try:
+                    tables.append(_table_to_dict(table))
+                except Exception:
+                    continue
         except Exception:
             pass
-        tables_lines = _detect_tables_lines(
-            page.get_drawings() if drawings else [])
-        tables = tables_ft + tables_lines
+
+        # Do not synthesize cells from the Cartesian product of every page
+        # line: unrelated rules and frames otherwise become phantom tables.
+        # If find_tables found nothing, leaving ``tables`` empty is safer.
 
         pages.append({
             "page": pno, "rect": _rect(rect), "blocks": blocks,
-            "images": images, "drawings_count": len(drawings), "tables": tables,
+            "images": images, "drawings_count": len(raw_drawings), "tables": tables,
         })
         if pno % 20 == 0:
             logger.info("  parse page %d/%d", pno + 1, doc.page_count)

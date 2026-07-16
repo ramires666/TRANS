@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import importlib
+import json
 import os
 import re
 import shutil
@@ -13,6 +15,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -28,6 +31,7 @@ UPLOADS.mkdir(exist_ok=True)
 app = FastAPI(title="PDF translator")
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
+IMAGE_POST_SEMAPHORE = threading.Semaphore(1)
 
 # ---------------------------- HTML ----------------------------
 HTML_PAGE = r"""<!doctype html>
@@ -131,6 +135,13 @@ HTML_PAGE = r"""<!doctype html>
     font-size:.85rem;margin-top:8px}
   .stats span b{color:var(--text)}
   .download{margin-top:14px}
+  .result-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .image-post{margin-top:16px;padding:16px;background:var(--panel2);
+    border:1px solid var(--border);border-radius:10px}
+  .image-post h3{margin:0 0 5px;font-size:1rem}
+  .image-post .hint{margin:0;color:var(--muted);font-size:.85rem}
+  .image-post .log{height:120px;margin-top:10px}
+  .image-post .prog-wrap{margin-top:12px}
   .badge{font-size:.7rem;padding:2px 8px;border-radius:99px;
     background:var(--panel2);border:1px solid var(--border);color:var(--muted)}
   .hidden{display:none}
@@ -215,7 +226,26 @@ HTML_PAGE = r"""<!doctype html>
     <div class="stats" id="stats"></div>
     <div class="log" id="log"></div>
     <div class="download hidden" id="downloadBox">
-      <a id="downloadLink" href="#" download><button data-i18n="download">⬇ Скачать результат PDF</button></a>
+      <div class="result-actions">
+        <a id="previewLink" href="#" target="_blank" rel="noopener"><button class="ghost" data-i18n="preview_base">Просмотреть базовый PDF</button></a>
+        <a id="downloadLink" href="#" download><button data-i18n="download">⬇ Скачать результат PDF</button></a>
+      </div>
+      <div class="image-post hidden" id="imagePostBox">
+        <h3 data-i18n="image_title">Перевести текст внутри изображений</h3>
+        <p class="hint" id="imagePostHint" data-i18n="image_preview_hint">Сначала просмотрите базовый PDF, затем запустите дополнительную обработку.</p>
+        <div class="prog-wrap hidden" id="imageProgWrap">
+          <div class="prog" id="imageProg"></div>
+          <div class="prog-pct" id="imageProgPct">0%</div>
+        </div>
+        <div class="stats" id="imageStats"></div>
+        <div class="row">
+          <button id="imagePostBtn" disabled data-i18n="image_start">Обработать изображения</button>
+          <button id="imageCancelBtn" class="ghost" disabled data-i18n="image_cancel">Отменить обработку</button>
+          <a id="imagePreviewLink" class="hidden" href="#" target="_blank" rel="noopener"><button class="ghost" data-i18n="image_preview">Просмотреть улучшенный PDF</button></a>
+          <a id="imageDownloadLink" class="hidden" href="#" download><button data-i18n="image_download">⬇ Скачать улучшенный PDF</button></a>
+        </div>
+        <div class="log hidden" id="imageLog"></div>
+      </div>
     </div>
   </div>
 
@@ -270,6 +300,22 @@ const I18N = {
     stage1: '1. Парсинг', stage2: '2. Сегментация', stage3: '3. Перевод',
     stage4: '4. Сборка', stage5: '5. Валидация',
     download: '⬇ Скачать результат PDF',
+    preview_base: 'Просмотреть базовый PDF',
+    image_title: 'Перевести текст внутри изображений',
+    image_preview_hint: 'Сначала просмотрите базовый PDF, затем запустите дополнительную обработку.',
+    image_ready_hint: 'Базовый PDF просмотрен. Можно запустить обработку изображений.',
+    image_running_hint: 'Дополнительная обработка изображений выполняется…',
+    image_done_hint: '✓ Улучшенный PDF готов. Базовый PDF сохранён без изменений.',
+    image_error_hint: 'Не удалось обработать изображения. Базовый PDF по-прежнему доступен.',
+    image_cancelled_hint: 'Обработка изображений отменена. Базовый PDF не изменён.',
+    image_start: 'Обработать изображения',
+    image_retry: 'Повторить обработку',
+    image_cancel: 'Отменить обработку',
+    image_preview: 'Просмотреть улучшенный PDF',
+    image_download: '⬇ Скачать улучшенный PDF',
+    image_start_error: 'Не удалось запустить обработку изображений: ',
+    image_cancel_req: 'Запрошена отмена обработки изображений…',
+    image_phase: 'Фаза: ',
     footer: 'Конвейер: PyMuPDF + OpenAI-совместимая LLM',
     need_pdf: 'Нужен PDF-файл',
     err_upload: 'Ошибка загрузки: ',
@@ -289,7 +335,7 @@ const I18N = {
     pipeline_err: 'Конвейер завершился с ошибкой. См. log/translate.log',
     stages: {parse:'Парсинг PDF', segment:'Сегментация',
       translate:'Перевод через LLM', build:'Сборка PDF', validate:'Валидация'},
-    states: {idle:'ожидание',running:'выполняется',done:'готово',
+    states: {idle:'ожидание',queued:'в очереди',running:'выполняется',done:'готово',
       error:'ошибка',cancelled:'отменено'},
   },
   en: {
@@ -319,6 +365,22 @@ const I18N = {
     stage1: '1. Parse', stage2: '2. Segment', stage3: '3. Translate',
     stage4: '4. Build', stage5: '5. Validate',
     download: '⬇ Download result PDF',
+    preview_base: 'Preview base PDF',
+    image_title: 'Translate text inside images',
+    image_preview_hint: 'Preview the base PDF first, then start the optional image pass.',
+    image_ready_hint: 'Base PDF previewed. Image processing can now be started.',
+    image_running_hint: 'Optional image processing is running…',
+    image_done_hint: '✓ Enhanced PDF is ready. The base PDF was left unchanged.',
+    image_error_hint: 'Image processing failed. The base PDF is still available.',
+    image_cancelled_hint: 'Image processing was cancelled. The base PDF was not changed.',
+    image_start: 'Process images',
+    image_retry: 'Retry image processing',
+    image_cancel: 'Cancel image processing',
+    image_preview: 'Preview enhanced PDF',
+    image_download: '⬇ Download enhanced PDF',
+    image_start_error: 'Could not start image processing: ',
+    image_cancel_req: 'Image processing cancellation requested…',
+    image_phase: 'Phase: ',
     footer: 'Pipeline: PyMuPDF + OpenAI-compatible LLM',
     need_pdf: 'PDF file required',
     err_upload: 'Upload error: ',
@@ -338,7 +400,7 @@ const I18N = {
     pipeline_err: 'Pipeline finished with error. See log/translate.log',
     stages: {parse:'Parsing PDF', segment:'Segmentation',
       translate:'LLM translation', build:'Building PDF', validate:'Validation'},
-    states: {idle:'idle',running:'running',done:'done',
+    states: {idle:'idle',queued:'queued',running:'running',done:'done',
       error:'error',cancelled:'cancelled'},
   },
 };
@@ -378,16 +440,20 @@ document.querySelectorAll('#langSwitch button').forEach(b => {
 });
 
 let currentJob = null, pollTimer = null, selectedFile = null, JOBS_STATE = null;
+let imagePostAvailable = false, basePreviewed = false;
 
 fetch('/api/config').then(r=>r.json()).then(c=>{
   const src = c.source_lang||'?', tgt = c.target_lang||'?';
   $('#langBadge').textContent = src.toUpperCase()+' → '+tgt.toUpperCase();
   $('#langHint').textContent = src+' → '+tgt;
+  imagePostAvailable = !!(c.image_postprocess && c.image_postprocess.available);
+  if (JOBS_STATE) updateImagePost(JOBS_STATE.image_post);
 });
 
 const drop = $('#drop'), fileInput = $('#file'), fileName = $('#fileName'),
       startBtn = $('#startBtn'), cancelBtn = $('#cancelBtn'),
-      resetBtn = $('#resetBtn');
+      resetBtn = $('#resetBtn'), imagePostBtn = $('#imagePostBtn'),
+      imageCancelBtn = $('#imageCancelBtn');
 
 drop.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => { if (e.target.files[0]) pickFile(e.target.files[0]); });
@@ -465,6 +531,7 @@ startBtn.addEventListener('click', async () => {
   $('#bannerText').textContent = t('starting');
   $('#dotAnim').classList.remove('hidden');
   $('#downloadBox').classList.add('hidden');
+  resetImagePostUi();
   startTimer();
 
   const fd = new FormData(); fd.append('file', selectedFile);
@@ -494,6 +561,65 @@ cancelBtn.addEventListener('click', async () => {
   await fetch('/api/cancel?job='+currentJob, {method:'POST'});
   log(t('cancel_req'), 'warn');
 });
+
+$('#previewLink').addEventListener('click', () => {
+  basePreviewed = true;
+  if (JOBS_STATE) updateImagePost(JOBS_STATE.image_post || {state:'idle'});
+});
+
+imagePostBtn.addEventListener('click', async () => {
+  if (!currentJob || !basePreviewed || !imagePostAvailable) return;
+  imagePostBtn.disabled = true;
+  imageCancelBtn.disabled = false;
+  $('#imageLog').classList.remove('hidden');
+  $('#imageLog').textContent = '';
+  $('#imageLog').dataset.seen = '0';
+  try {
+    const r = await fetch('/api/jobs/'+encodeURIComponent(currentJob)+'/image-postprocess',
+      {method:'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok){
+      imageLog(t('image_start_error')+(data.detail || r.status), 'err');
+      imagePostBtn.disabled = !basePreviewed;
+      imageCancelBtn.disabled = true;
+      return;
+    }
+    const queued = Object.assign({}, (JOBS_STATE && JOBS_STATE.image_post) || {},
+      {state:'queued', progress:0, total:0, logs:[]});
+    updateImagePost(queued);
+    pollStatus();
+  } catch(e) {
+    imageLog(t('image_start_error')+e, 'err');
+    imagePostBtn.disabled = !basePreviewed;
+    imageCancelBtn.disabled = true;
+  }
+});
+
+imageCancelBtn.addEventListener('click', async () => {
+  if (!currentJob) return;
+  await fetch('/api/jobs/'+encodeURIComponent(currentJob)+'/image-postprocess/cancel',
+    {method:'POST'});
+  imageLog(t('image_cancel_req'), 'warn');
+});
+
+function resetImagePostUi(){
+  basePreviewed = false;
+  $('#imagePostBox').classList.add('hidden');
+  $('#imageProgWrap').classList.add('hidden');
+  $('#imageProg').className = 'prog';
+  $('#imageProg').style.width = '0%';
+  $('#imageProgPct').textContent = '0%';
+  $('#imageStats').textContent = '';
+  $('#imageLog').textContent = '';
+  $('#imageLog').dataset.seen = '0';
+  $('#imageLog').classList.add('hidden');
+  $('#imagePreviewLink').classList.add('hidden');
+  $('#imageDownloadLink').classList.add('hidden');
+  imagePostBtn.textContent = t('image_start');
+  imagePostBtn.disabled = true;
+  imageCancelBtn.disabled = true;
+  $('#imagePostHint').textContent = t('image_preview_hint');
+}
 
 function resetStages(){
   document.querySelectorAll('.stage').forEach(s => {
@@ -529,6 +655,83 @@ function log(msg, cls){
   el.appendChild(span); el.scrollTop = el.scrollHeight;
 }
 
+function imageLog(msg, cls){
+  const el = $('#imageLog'); const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = msg + '\n';
+  el.appendChild(span); el.scrollTop = el.scrollHeight;
+}
+
+function updateImagePost(p){
+  const box = $('#imagePostBox');
+  if (!imagePostAvailable || !JOBS_STATE || JOBS_STATE.state !== 'done'){
+    box.classList.add('hidden'); return;
+  }
+  box.classList.remove('hidden');
+  p = p || {state:'idle', progress:0, total:0, logs:[]};
+  const state = p.state || 'idle';
+  const active = state === 'queued' || state === 'running';
+  const prog = $('#imageProg'), pct = $('#imageProgPct');
+  prog.classList.remove('indeterminate','running');
+
+  if (state === 'idle'){
+    $('#imageProgWrap').classList.add('hidden');
+  } else {
+    $('#imageProgWrap').classList.remove('hidden');
+    let percent = 0;
+    if (state === 'done') percent = 100;
+    else if ((p.total||0) > 0) percent = Math.min(100,
+      Math.round((p.progress||0) / p.total * 100));
+    prog.style.width = percent + '%';
+    pct.textContent = percent + '%';
+    if (active && !(p.total > 0)){
+      prog.classList.add('indeterminate','running'); pct.textContent = '…';
+    } else if (active) prog.classList.add('running');
+  }
+
+  imagePostBtn.disabled = active || state === 'done' || !basePreviewed;
+  imageCancelBtn.disabled = !active;
+  imagePostBtn.textContent = (state === 'error' || state === 'cancelled')
+    ? t('image_retry') : t('image_start');
+  if (active) $('#imagePostHint').textContent = t('image_running_hint');
+  else if (state === 'done') $('#imagePostHint').textContent = t('image_done_hint');
+  else if (state === 'error') $('#imagePostHint').textContent = t('image_error_hint');
+  else if (state === 'cancelled') $('#imagePostHint').textContent = t('image_cancelled_hint');
+  else $('#imagePostHint').textContent = basePreviewed
+    ? t('image_ready_hint') : t('image_preview_hint');
+
+  const details = [];
+  if (p.phase) details.push(t('image_phase')+p.phase);
+  if ((p.total||0) > 0) details.push((p.progress||0)+' / '+p.total);
+  if ((p.ok||0) > 0) details.push('OK: '+p.ok);
+  if ((p.cached||0) > 0) details.push(t('stat_cached')+p.cached);
+  if ((p.failed||0) > 0) details.push(t('stat_fail')+p.failed);
+  details.push(t('stat_status')+(I18N[LANG].states[state]||state));
+  $('#imageStats').textContent = details.join(' · ');
+
+  const seen = ($('#imageLog').dataset.seen||'0')|0;
+  if (p.logs && p.logs.length > seen){
+    $('#imageLog').classList.remove('hidden');
+    for (let i = seen; i < p.logs.length; i++){
+      const line = p.logs[i]; let cls = '';
+      if (/ошибк|error|exception|fail/i.test(line)) cls = 'err';
+      else if (/готово|done|success|ok=/i.test(line)) cls = 'ok';
+      else if (/warn|предупр/i.test(line)) cls = 'warn';
+      imageLog(line, cls);
+    }
+    $('#imageLog').dataset.seen = p.logs.length;
+  }
+
+  const imageReady = state === 'done' && p.result_ready;
+  $('#imagePreviewLink').classList.toggle('hidden', !imageReady);
+  $('#imageDownloadLink').classList.toggle('hidden', !imageReady);
+  if (imageReady){
+    const root = '/api/jobs/'+encodeURIComponent(currentJob)+'/result?variant=images';
+    $('#imagePreviewLink').href = root+'&disposition=inline';
+    $('#imageDownloadLink').href = root+'&disposition=attachment';
+  }
+}
+
 function pollStatus(){
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
@@ -537,7 +740,10 @@ function pollStatus(){
       const r = await fetch('/api/status?job='+currentJob);
       const d = await r.json();
       update(d);
-      if (d.state === 'done' || d.state === 'error' || d.state === 'cancelled'){
+      const imageActive = d.image_post &&
+        (d.image_post.state === 'queued' || d.image_post.state === 'running');
+      if ((d.state === 'done' || d.state === 'error' || d.state === 'cancelled') &&
+          !imageActive){
         clearInterval(pollTimer); pollTimer = null;
         stopTimer(); cancelBtn.disabled = true; startBtn.disabled = false;
       }
@@ -622,8 +828,11 @@ function update(d){
   }
   if (d.state === 'done' && d.result_path){
     $('#downloadBox').classList.remove('hidden');
-    $('#downloadLink').href = '/api/download?job='+currentJob;
+    const root = '/api/jobs/'+encodeURIComponent(currentJob)+'/result?variant=base';
+    $('#previewLink').href = root+'&disposition=inline';
+    $('#downloadLink').href = root+'&disposition=attachment';
   }
+  updateImagePost(d.image_post);
   if (d.state === 'error'){
     log(t('pipeline_err'), 'err');
   }
@@ -646,25 +855,344 @@ RE_PAGES_IMG = re.compile(
     r"страниц:\s+src=(\d+)\s+out=(\d+).*?изображ\.:?\s+src=(\d+)\s+out=(\d+)",
     re.IGNORECASE | re.DOTALL)
 RE_SEG_COUNT = re.compile(r"Сегментов:\s+(\d+)")
+VISION_EVENT_PREFIX = "@@VISION@@"
+RE_IMAGE_PROGRESS = re.compile(
+    r"(?:progress|image|изображ\w*)[^\d]*(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+RE_IMAGE_COUNTS = re.compile(
+    r"(?:ok|processed)=(\d+)(?:\s+cached=(\d+))?\s+(?:fail|failed|errors?)=(\d+)",
+    re.IGNORECASE)
+RE_IMAGE_PHASE = re.compile(r"(?:phase|этап)\s*[:=]\s*([\w.-]+)", re.IGNORECASE)
 
 
-def _new_job(src_path: str) -> dict:
+def _new_image_post_state() -> dict:
+    return {
+        "state": "idle", "phase": "", "progress": 0, "total": 0,
+        "ok": 0, "cached": 0, "failed": 0, "logs": [],
+        "proc": None, "cancel": False, "result_path": None,
+        "base_path": None, "partial_path": None, "final_path": None,
+        "download_name": None, "started_at": None, "finished_at": None,
+    }
+
+
+def _image_postprocess_capability(cfg: dict | None = None) -> tuple[bool, str]:
+    """Return availability without treating a regular text model as vision."""
+    try:
+        cfg = cfg if cfg is not None else load_config()
+    except Exception:
+        return False, "configuration unavailable"
+    if not str(cfg.get("vision_llm_model", "") or "").strip():
+        return False, "vision_llm_model is not configured"
+    try:
+        importlib.import_module("pipeline.vision.image_overlay")
+    except Exception:
+        return False, "pipeline.vision.image_overlay is unavailable"
+    return True, ""
+
+
+def _resolve_upload_pdf(value: str | os.PathLike, *, must_exist: bool = True) -> Path:
+    """Resolve a job-owned PDF and reject paths outside the upload directory."""
+    uploads = UPLOADS.resolve()
+    path = Path(value).resolve(strict=must_exist)
+    try:
+        path.relative_to(uploads)
+    except ValueError as exc:
+        raise ValueError("PDF path is outside the upload directory") from exc
+    if path.suffix.lower() != ".pdf":
+        raise ValueError("result is not a PDF")
+    if must_exist and (not path.is_file() or path.stat().st_size == 0):
+        raise ValueError("PDF file is missing or empty")
+    return path
+
+
+def _image_output_paths(job_id: str, base_pdf: Path) -> tuple[Path, Path, str]:
+    safe_job = re.sub(r"[^0-9A-Za-z_-]", "_", str(job_id))[:32] or "job"
+    base_stem = base_pdf.stem
+    if base_stem.startswith(f"{safe_job}_"):
+        base_stem = base_stem[len(safe_job) + 1:]
+    safe_stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base_stem)
+    safe_stem = re.sub(r"\s+", " ", safe_stem).strip(" ._")[:100] or "translated"
+    download_name = f"{safe_stem}_IMG.pdf"
+    final_path = UPLOADS.resolve() / f"{safe_job}_{download_name}"
+    partial_path = final_path.with_name(f"{final_path.stem}.partial.pdf")
+    return final_path, partial_path, download_name
+
+
+def _append_image_log_locked(image_post: dict, line: str) -> None:
+    image_post["logs"].append(str(line))
+    if len(image_post["logs"]) > 400:
+        image_post["logs"] = image_post["logs"][-250:]
+
+
+def _parse_image_post_line(job: dict, line: str) -> None:
+    """Parse structured vision events, while retaining ordinary CLI output."""
+    line = line.strip()
+    if not line:
+        return
+    payload = None
+    if line.startswith(VISION_EVENT_PREFIX):
+        try:
+            candidate = json.loads(line[len(VISION_EVENT_PREFIX):].strip())
+            if isinstance(candidate, dict):
+                payload = candidate
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = None
+
+    with JOBS_LOCK:
+        image_post = job["image_post"]
+        if payload is not None:
+            phase = payload.get("phase") or payload.get("stage") or payload.get("event")
+            if phase and str(phase).lower() not in {"progress", "log"}:
+                image_post["phase"] = str(phase)[:80]
+            number_fields = {
+                "current": "progress", "progress": "progress", "total": "total",
+                "ok": "ok", "processed": "ok", "cached": "cached",
+                "failed": "failed", "fail": "failed", "errors": "failed",
+            }
+            for source_key, state_key in number_fields.items():
+                if source_key in payload:
+                    try:
+                        image_post[state_key] = max(0, int(payload[source_key]))
+                    except (TypeError, ValueError):
+                        pass
+            message = payload.get("message") or payload.get("log")
+            if message:
+                _append_image_log_locked(image_post, str(message))
+            return
+
+        _append_image_log_locked(image_post, line)
+        match = RE_IMAGE_PROGRESS.search(line) or RE_TQDM.search(line)
+        if match:
+            # RE_TQDM has percentage as group 1, progress/total as groups 2/3.
+            offset = 1 if match.re is RE_TQDM else 0
+            image_post["progress"] = int(match.group(1 + offset))
+            image_post["total"] = int(match.group(2 + offset))
+        match = RE_IMAGE_COUNTS.search(line)
+        if match:
+            image_post["ok"] = int(match.group(1))
+            image_post["cached"] = int(match.group(2) or 0)
+            image_post["failed"] = int(match.group(3))
+        match = RE_IMAGE_PHASE.search(line)
+        if match:
+            image_post["phase"] = match.group(1)[:80]
+
+
+def _validate_image_pdf(base_pdf: Path, candidate_pdf: Path) -> tuple[bool, str, int]:
+    """Open every output page and reject truncated image-postprocess results."""
+    try:
+        import fitz
+
+        if not candidate_pdf.is_file() or candidate_pdf.stat().st_size == 0:
+            return False, "image postprocess did not create a PDF", 0
+        with fitz.open(str(base_pdf)) as base_doc:
+            base_pages = base_doc.page_count
+        with fitz.open(str(candidate_pdf)) as candidate_doc:
+            if not candidate_doc.is_pdf or candidate_doc.needs_pass:
+                return False, "image postprocess output is not a readable PDF", 0
+            output_pages = candidate_doc.page_count
+            if output_pages < base_pages:
+                return False, (
+                    f"image postprocess lost pages: base={base_pages}, out={output_pages}"
+                ), output_pages
+            for page_no in range(output_pages):
+                candidate_doc.load_page(page_no)
+        return True, "", output_pages
+    except Exception as exc:
+        return False, f"invalid image postprocess PDF: {exc}", 0
+
+
+def _finish_image_post(job: dict, state: str, message: str | None = None) -> None:
+    with JOBS_LOCK:
+        image_post = job["image_post"]
+        image_post["state"] = state
+        image_post["proc"] = None
+        image_post["finished_at"] = time.time()
+        if message:
+            _append_image_log_locked(image_post, message)
+
+
+def _run_image_postprocess(job: dict) -> None:
+    """Run the optional image pass without mutating the main pipeline state."""
+    acquired = False
+    partial_path: Path | None = None
+    final_path: Path | None = None
+    partial_report: Path | None = None
+    final_report: Path | None = None
+    proc = None
+    try:
+        while not acquired:
+            acquired = IMAGE_POST_SEMAPHORE.acquire(timeout=0.2)
+            with JOBS_LOCK:
+                cancelled = bool(job["image_post"].get("cancel"))
+            if cancelled:
+                _finish_image_post(job, "cancelled", "[cancelled before start]")
+                return
+
+        with JOBS_LOCK:
+            image_post = job["image_post"]
+            if image_post.get("cancel"):
+                image_post["state"] = "cancelled"
+                image_post["finished_at"] = time.time()
+                _append_image_log_locked(image_post, "[cancelled before start]")
+                return
+            image_post["state"] = "running"
+            image_post["phase"] = "start"
+            image_post["started_at"] = time.time()
+            base_path = Path(image_post["base_path"])
+            partial_path = Path(image_post["partial_path"])
+            final_path = Path(image_post["final_path"])
+            partial_report = Path(str(partial_path) + ".vision.json")
+            final_report = Path(str(final_path) + ".vision.json")
+
+        # These are unique, server-derived derivative paths; never touch base_path.
+        for stale in (partial_path, final_path, partial_report, final_report):
+            if stale.exists():
+                stale.unlink()
+
+        cmd = [
+            sys.executable, "-m", "app.cli", "--image-postprocess",
+            str(base_path), "--out", str(partial_path),
+        ]
+        env = dict(os.environ)
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONPATH"] = str(ROOT)
+        proc = subprocess.Popen(
+            cmd, cwd=str(ROOT), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            encoding="utf-8", errors="replace", text=True, bufsize=1,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        with JOBS_LOCK:
+            image_post = job["image_post"]
+            image_post["proc"] = proc
+            cancelled = bool(image_post.get("cancel"))
+        if cancelled:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+        if proc.stdout is not None:
+            for raw_line in proc.stdout:
+                for chunk in re.split(r"\r", raw_line.rstrip("\r\n")):
+                    if chunk.strip():
+                        _parse_image_post_line(job, chunk)
+                with JOBS_LOCK:
+                    cancelled = bool(job["image_post"].get("cancel"))
+                if cancelled:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    break
+        waited_rc = proc.wait()
+        rc = proc.returncode if proc.returncode is not None else waited_rc
+        with JOBS_LOCK:
+            cancelled = bool(job["image_post"].get("cancel"))
+            job["image_post"]["proc"] = None
+        if cancelled:
+            _finish_image_post(job, "cancelled", "[cancelled by user]")
+            return
+        if rc != 0:
+            _finish_image_post(job, "error", f"[error] image postprocess exited with code {rc}")
+            return
+
+        valid, reason, page_count = _validate_image_pdf(base_path, partial_path)
+        if not valid:
+            _finish_image_post(job, "error", f"[error] {reason}")
+            return
+        with JOBS_LOCK:
+            cancelled = bool(job["image_post"].get("cancel"))
+            if not cancelled:
+                job["image_post"]["phase"] = "promote"
+        if cancelled:
+            _finish_image_post(job, "cancelled", "[cancelled by user]")
+            return
+
+        os.replace(partial_path, final_path)
+        if partial_report.exists():
+            try:
+                os.replace(partial_report, final_report)
+            except OSError as exc:
+                with JOBS_LOCK:
+                    _append_image_log_locked(
+                        job["image_post"],
+                        f"[warning] vision report was not promoted: {exc}",
+                    )
+        with JOBS_LOCK:
+            image_post = job["image_post"]
+            if image_post.get("cancel"):
+                cancelled = True
+            else:
+                cancelled = False
+                image_post["state"] = "done"
+                image_post["phase"] = "done"
+                if image_post["total"] > 0:
+                    image_post["progress"] = image_post["total"]
+                else:
+                    image_post["progress"] = page_count
+                    image_post["total"] = page_count
+                image_post["result_path"] = str(final_path)
+                image_post["proc"] = None
+                image_post["finished_at"] = time.time()
+                _append_image_log_locked(image_post, "[done] image postprocess completed")
+        if cancelled:
+            if final_path.exists():
+                final_path.unlink()
+            if final_report is not None and final_report.exists():
+                final_report.unlink()
+            _finish_image_post(job, "cancelled", "[cancelled by user]")
+    except Exception as exc:
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        with JOBS_LOCK:
+            cancelled = bool(job.get("image_post", {}).get("cancel"))
+        _finish_image_post(
+            job, "cancelled" if cancelled else "error",
+            "[cancelled by user]" if cancelled else f"[exception] {exc}",
+        )
+    finally:
+        if partial_path is not None:
+            try:
+                if partial_path.exists():
+                    partial_path.unlink()
+            except OSError:
+                pass
+        if partial_report is not None:
+            try:
+                partial_report.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if acquired:
+            IMAGE_POST_SEMAPHORE.release()
+
+
+def _new_job(src_path: str, job_id: str | None = None) -> dict:
     cfg = load_config()
     tgt = cfg.get("target_lang", "ru").upper()
+    job_id = job_id or uuid.uuid4().hex[:12]
     stem = Path(src_path).stem
     # срезаем job_id-префикс, добавленный при upload
     m = re.match(r"^[0-9a-f]{12}_(.+)$", stem)
     clean_stem = m.group(1) if m else stem
     # временно — переведённое имя подставится после успеха конвейера
-    out_name = f"{clean_stem}_{tgt}.pdf"
+    download_name = f"{clean_stem}_{tgt}.pdf"
+    # Внутреннее имя всегда уникально для job: параллельные загрузки файлов с
+    # одинаковым названием не перезаписывают результаты друг друга.
+    out_name = f"{job_id}_{download_name}"
     return {
-        "job_id": uuid.uuid4().hex[:12],
+        "job_id": job_id,
         "src": src_path,
-        "out_path": str(ROOT / "uploads" / out_name),
+        "out_path": str(UPLOADS.resolve() / out_name),
+        "download_name": download_name,
         "state": "idle", "stage": "", "progress": 0, "total": 0,
         "ok": -1, "cached": -1, "fail": -1,
         "pages": None, "images": None,
-        "logs": [], "result_path": None, "proc": None, "cancel": False,
+        "logs": [], "result_path": None, "base_result_path": None,
+        "proc": None, "cancel": False, "image_post": _new_image_post_state(),
         "started_at": time.time(),
     }
 
@@ -686,12 +1214,18 @@ def _run_pipeline(job: dict, resume: bool, from_translate: bool, limit: int,
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONPATH"] = str(ROOT)
 
-    proc = subprocess.Popen(
-        cmd, cwd=str(ROOT), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        encoding="utf-8", errors="replace", text=True, bufsize=1,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(ROOT), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            encoding="utf-8", errors="replace", text=True, bufsize=1,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except Exception as exc:
+        with JOBS_LOCK:
+            job["state"] = "error"
+            job["logs"].append(f"[exception] CLI не запущен: {exc}")
+        return
     with JOBS_LOCK:
         job["proc"] = proc
         job["state"] = "running"
@@ -722,43 +1256,78 @@ def _run_pipeline(job: dict, resume: bool, from_translate: bool, limit: int,
 
     rc = proc.returncode
     with JOBS_LOCK:
+        cancelled = bool(job["cancel"])
+        job["proc"] = None
+        out_value = job["out_path"]
+        job_id = job["job_id"]
+        src_value = job["src"]
+
+    if cancelled:
+        with JOBS_LOCK:
+            job["state"] = "cancelled"
+        return
+    if rc != 0:
+        with JOBS_LOCK:
+            job["state"] = "error"
+            job["logs"].append(f"[error] cli завершился с кодом {rc}")
+        return
+
+    # Перевод имени и файловые операции выполняются без JOBS_LOCK: status и
+    # cancel других заданий не должны ждать сетевой LLM-вызов.
+    out_p = Path(out_value)
+    download_name = Path(out_value).name
+    rename_log = None
+    rename_error = None
+    if out_p.exists():
+        try:
+            cfg = load_config()
+            tgt = cfg.get("target_lang", "ru").upper()
+            src_stem = Path(src_value).stem
+            translated = translate_filename_stem(src_stem, cfg)
+            safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", translated)
+            safe = re.sub(r"\s+", " ", safe).strip()
+            if len(safe) > 80:
+                safe = safe[:80].rsplit(" ", 1)[0].rstrip()
+            if safe:
+                download_name = f"{safe}_{tgt}.pdf"
+                new_path = out_p.with_name(f"{job_id}_{download_name}")
+                if new_path != out_p:
+                    # Путь содержит job_id и принадлежит только этому заданию.
+                    old_path = out_p
+                    os.replace(old_path, new_path)
+                    out_p = new_path
+                    rename_log = f"[rename] {old_path.name} -> {new_path.name}"
+                    old_report = Path(str(old_path) + ".layout.json")
+                    if old_report.exists():
+                        try:
+                            os.replace(
+                                old_report,
+                                Path(str(new_path) + ".layout.json"),
+                            )
+                        except OSError as exc:
+                            rename_error = f"[layout report rename skipped] {exc}"
+        except Exception as exc:
+            rename_error = f"[rename skipped] {exc}"
+
+    with JOBS_LOCK:
         if job["cancel"]:
             job["state"] = "cancelled"
-        else:
-            # Переименуем результат в переведённое оригинальное имя,
-            # если файл создан (даже при провале validate — файл годный).
-            out_p = Path(job["out_path"])
-            if out_p.exists():
-                try:
-                    cfg = load_config()
-                    tgt = cfg.get("target_lang", "ru").upper()
-                    src_stem = Path(job["src"]).stem
-                    translated = translate_filename_stem(src_stem, cfg)
-                    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", translated)
-                    safe = re.sub(r"\s+", " ", safe).strip()
-                    if len(safe) > 80:
-                        safe = safe[:80].rsplit(" ", 1)[0].rstrip()
-                    if safe:
-                        new_name = f"{safe}_{tgt}.pdf"
-                        new_path = out_p.with_name(new_name)
-                        if new_path != out_p:
-                            if new_path.exists():
-                                new_path.unlink()
-                            out_p.rename(new_path)
-                            job["out_path"] = str(new_path)
-                            job["logs"].append(
-                                f"[rename] {out_p.name} -> {new_path.name}")
-                        out_p = new_path
-                except Exception as e:
-                    job["logs"].append(f"[rename skipped] {e}")
-                job["result_path"] = str(out_p)
-            if rc == 0:
-                job["state"] = "done"
-                job["stage"] = "validate"
-                job["logs"].append("[done] Конвейер завершён успешно.")
-            else:
-                job["state"] = "error"
-                job["logs"].append(f"[error] cli завершился с кодом {rc}")
+            return
+        if not out_p.is_file():
+            job["state"] = "error"
+            job["logs"].append("[error] итоговый PDF не найден")
+            return
+        job["out_path"] = str(out_p)
+        job["result_path"] = str(out_p)
+        job["base_result_path"] = str(out_p)
+        job["download_name"] = download_name
+        if rename_log:
+            job["logs"].append(rename_log)
+        if rename_error:
+            job["logs"].append(rename_error)
+        job["state"] = "done"
+        job["stage"] = "validate"
+        job["logs"].append("[done] Конвейер завершён успешно.")
 
 
 def _parse_line(job: dict, line: str):
@@ -820,8 +1389,13 @@ async def health():
 @app.get("/api/config")
 async def api_config():
     cfg = load_config()
+    image_available, image_reason = _image_postprocess_capability(cfg)
     return {"source_lang": cfg.get("source_lang", "?"),
-            "target_lang": cfg.get("target_lang", "?")}
+            "target_lang": cfg.get("target_lang", "?"),
+            "image_postprocess": {
+                "available": image_available,
+                "reason": image_reason,
+            }}
 
 
 @app.post("/api/upload")
@@ -889,11 +1463,18 @@ async def start(payload: dict, background_tasks: BackgroundTasks = None):
         mode = "pipeline"
     if not job_id or not src:
         raise HTTPException(400, "требуются поля job и src")
-    if not Path(src).exists():
-        raise HTTPException(404, "исходный PDF не найден")
+    if not re.fullmatch(r"[0-9a-f]{12}", str(job_id)):
+        raise HTTPException(400, "некорректный job id")
+    try:
+        src_path = _resolve_upload_pdf(src)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "исходный PDF не найден") from exc
+    if not src_path.name.startswith(f"{job_id}_"):
+        raise HTTPException(403, "исходный PDF не принадлежит этому job")
     with JOBS_LOCK:
-        j = _new_job(src)
-        j["job_id"] = job_id
+        if job_id in JOBS:
+            raise HTTPException(409, "job уже запущен")
+        j = _new_job(str(src_path), job_id)
         JOBS[job_id] = j
     background_tasks.add_task(_run_pipeline, j, resume, from_translate, limit, mode)
     return {"job_id": job_id, "state": "running"}
@@ -905,39 +1486,168 @@ async def status(job: str):
         j = JOBS.get(job)
         if not j:
             raise HTTPException(404, "job не найден")
+        image_post = j.setdefault("image_post", _new_image_post_state())
+        image_result = image_post.get("result_path")
+        image_public = {
+            "state": image_post.get("state", "idle"),
+            "phase": image_post.get("phase", ""),
+            "progress": image_post.get("progress", 0),
+            "total": image_post.get("total", 0),
+            "ok": image_post.get("ok", 0),
+            "cached": image_post.get("cached", 0),
+            "failed": image_post.get("failed", 0),
+            "logs": list(image_post.get("logs", [])[-100:]),
+            "result_ready": bool(
+                image_post.get("state") == "done" and image_result
+                and Path(image_result).is_file()
+            ),
+        }
         return {
             "state": j["state"], "stage": j["stage"],
             "progress": j["progress"], "total": j["total"],
             "ok": j["ok"], "cached": j["cached"], "fail": j["fail"],
             "pages": j["pages"], "images": j["images"],
             "logs": j["logs"][-200:],
-            "result_path": j["result_path"],
+            # Не публикуем абсолютный серверный путь; старому UI достаточно
+            # truthy имени, новые клиенты используют result_ready.
+            "result_path": (Path(j["result_path"]).name
+                            if j.get("result_path") else None),
+            "result_ready": bool(
+                j.get("state") == "done" and j.get("result_path")
+                and Path(j["result_path"]).is_file()
+            ),
+            "image_post": image_public,
         }
 
 
 @app.post("/api/cancel")
 async def cancel(job: str):
+    proc = None
     with JOBS_LOCK:
         j = JOBS.get(job)
         if j:
             j["cancel"] = True
-            if j.get("proc"):
-                try: j["proc"].terminate()
-                except Exception: pass
+            proc = j.get("proc")
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
     return {"ok": True}
 
 
-@app.get("/api/download")
-async def download(job: str):
+@app.post("/api/jobs/{job_id}/image-postprocess", status_code=202)
+async def start_image_postprocess(job_id: str, background_tasks: BackgroundTasks):
+    available, reason = _image_postprocess_capability()
+    if not available:
+        raise HTTPException(503, reason)
+
     with JOBS_LOCK:
-        j = JOBS.get(job)
-        if not j or not j.get("result_path"):
-            raise HTTPException(404, "результат недоступен")
-        p = j["result_path"]
-    if not Path(p).exists():
-        raise HTTPException(404, "файл не найден")
-    return FileResponse(p, media_type="application/pdf",
-                        filename=Path(p).name)
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "job не найден")
+        if job.get("state") != "done":
+            raise HTTPException(409, "основной перевод ещё не завершён")
+        image_post = job.setdefault("image_post", _new_image_post_state())
+        if image_post.get("state") in {"queued", "running"}:
+            raise HTTPException(409, "обработка изображений уже выполняется")
+        if image_post.get("state") == "done":
+            raise HTTPException(409, "обработка изображений уже завершена")
+        base_value = job.get("base_result_path") or job.get("result_path")
+    if not base_value:
+        raise HTTPException(404, "базовый результат недоступен")
+    try:
+        base_path = _resolve_upload_pdf(base_value)
+        final_path, partial_path, download_name = _image_output_paths(job_id, base_path)
+        _resolve_upload_pdf(final_path, must_exist=False)
+        _resolve_upload_pdf(partial_path, must_exist=False)
+        if final_path.resolve() == base_path.resolve():
+            raise ValueError("derivative path collides with base PDF")
+    except (OSError, ValueError) as exc:
+        raise HTTPException(403, f"небезопасный путь результата: {exc}") from exc
+
+    with JOBS_LOCK:
+        # Re-check after filesystem validation so concurrent requests cannot queue twice.
+        current = JOBS.get(job_id)
+        if current is not job or job.get("state") != "done":
+            raise HTTPException(409, "состояние job изменилось")
+        if job["image_post"].get("state") in {"queued", "running", "done"}:
+            raise HTTPException(409, "обработка изображений уже запущена")
+        image_post = _new_image_post_state()
+        image_post.update({
+            "state": "queued", "phase": "queue",
+            "base_path": str(base_path), "partial_path": str(partial_path),
+            "final_path": str(final_path), "download_name": download_name,
+        })
+        job["image_post"] = image_post
+    background_tasks.add_task(_run_image_postprocess, job)
+    return {"job_id": job_id, "state": "queued"}
+
+
+@app.post("/api/jobs/{job_id}/image-postprocess/cancel")
+async def cancel_image_postprocess(job_id: str):
+    proc = None
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "job не найден")
+        image_post = job.setdefault("image_post", _new_image_post_state())
+        if image_post.get("state") in {"queued", "running"}:
+            image_post["cancel"] = True
+            proc = image_post.get("proc")
+        state = image_post.get("state", "idle")
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    return {"ok": True, "state": state}
+
+
+def _result_response(job_id: str, variant: str, disposition: str) -> FileResponse:
+    normalized_variant = variant.lower()
+    if normalized_variant not in {"base", "image", "images"}:
+        raise HTTPException(400, "variant должен быть base или images")
+    if disposition not in {"inline", "attachment"}:
+        raise HTTPException(400, "disposition должен быть inline или attachment")
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "job не найден")
+        if normalized_variant == "base":
+            value = job.get("base_result_path") or job.get("result_path")
+            download_name = (job.get("download_name")
+                             or (Path(value).name if value else "result.pdf"))
+        else:
+            image_post = job.setdefault("image_post", _new_image_post_state())
+            if image_post.get("state") != "done":
+                raise HTTPException(404, "улучшенный PDF ещё не готов")
+            value = image_post.get("result_path")
+            download_name = image_post.get("download_name") or "result_IMG.pdf"
+    if not value:
+        raise HTTPException(404, "результат недоступен")
+    try:
+        path = _resolve_upload_pdf(value)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "файл результата недоступен") from exc
+    response = FileResponse(path, media_type="application/pdf", filename=download_name)
+    if disposition == "inline":
+        response.headers["content-disposition"] = (
+            "inline; filename*=UTF-8''" + quote(download_name, safe="")
+        )
+    return response
+
+
+@app.get("/api/jobs/{job_id}/result")
+async def job_result(job_id: str, variant: str = "base",
+                     disposition: str = "attachment"):
+    return _result_response(job_id, variant, disposition)
+
+
+@app.get("/api/download")
+async def download(job: str, variant: str = "base"):
+    """Backward-compatible download route with optional derivative selection."""
+    return _result_response(job, variant, "attachment")
 
 
 if __name__ == "__main__":

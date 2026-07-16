@@ -1,181 +1,161 @@
-# PDF-переводчик технических руководств
+# PDF-переводчик технической документации
 
-Автоматизированный перевод PDF-документов с сохранением структуры,
-изображений, векторной графики, таблиц, оглавления и перекрёстных ссылок.
-Перевод выполняется локальной LLM по OpenAI-совместимому протоколу.
+Переводит PDF через OpenAI-совместимую LLM и сохраняет исходную геометрию страниц, изображения, векторную графику, таблицы и закладки. Основной режим работает по текстовым сегментам; языковая пара задаётся в `config/config.yaml` (по умолчанию ZH → RU).
 
-Языковая пара настраивается через `config/config.yaml`: по умолчанию ZH → RU,
-но можно переключить на любую поддерживаемую (английский, немецкий и т.д.),
-переопределив `source_lang`/`target_lang`/`anchors`.
+## Что реализовано
 
-## Возможности
+- Парсинг текста и таблиц PyMuPDF с привязкой сегментов к физическим ячейкам.
+- Подбор TTF-шрифта целевого языка и, при `match_fonts: true`, близкого семейства/начертания.
+- Определение стиля по значимым символам: пробелы, маркеры списков и PUA-глифы не должны навязывать соседнему тексту случайный мелкий шрифт.
+- Пакетный перевод LLM со строгим JSON-контрактом, глоссарием, проверкой кодов, чисел, маркеров и ссылок.
+- Кэш переводов и безопасный `--resume`, учитывающий исходный PDF, конфигурацию, промпт, глоссарий и код стадии.
+- Читаемые минимальные кегли, приложение для не поместившихся переводов, отчёт вёрстки и автоматическая валидация.
+- CLI и веб-интерфейс.
+- Отдельная необязательная обработка текста внутри растровых изображений через vision LLM.
 
-- Сохранение полной структуры: заголовки 4 уровней, нумерованные списки, оглавление-закладки.
-- Сохранение изображений и векторной графики на исходных местах.
-- Обработка нарисованных линиями таблиц + `find_tables()`.
-- Перевод перекрёстных ссылок (для ZH→RU: `图N-M` → `Рис. N-M`, `表N-N` → `Табл. N-N`).
-- TTF-шрифт целевого языка (DejaVuSans/Arial/Noto) с автоподбором размера.
-- SQLite-кэш переводов, привязанный к sha256 исходного PDF — корректный RESUME при смене файла.
-- Параллельный перевод; запуск с произвольной стадии; resume по хэшу.
-- Веб-интерфейс (FastAPI одностраничник) и CLI.
-
-## Стек
-
-| Назначение | Библиотека |
-|---|---|
-| Парсинг/сборка PDF | PyMuPDF (fitz) |
-| Нейросетевой перевод | локальная LLM (OpenAI-совместимый API) |
-| HTTP-клиент | `openai` |
-| Веб-интерфейс | FastAPI + uvicorn |
-| Конфиг/глоссарий | YAML / CSV |
-
-## Установка
+## Установка и конфигурация
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-LLM-сервер (llama.cpp / LM Studio) должен слушать `http://127.0.0.1:8080/v1`.
-Модель и параметры — в `config/config.yaml`.
-
-## Конфигурация
-
-`config/config.yaml`:
+Минимальные настройки текстовой LLM:
 
 ```yaml
 source_lang: "zh"
 target_lang: "ru"
 
-pdf_path: ""
-out_path: "_RU.pdf"
-
 llm_base_url: "http://127.0.0.1:8080/v1"
-llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
+llm_api_key: "not-needed"
+llm_model: "имя-текстовой-модели"
+
 workers: 2
+llm_batch_max_items: 24
+llm_batch_max_chars: 4000
+translation_max_attempts: 3
 
 glossary_path: "config/glossary.csv"
-target_font: ""      # пусто = авто-поиск DejaVu/Arial
-
-# anchors (необязательно, по умолчанию берутся из пресета source_lang)
-# anchors:
-#   fig: {src_regex: '图\s*(\d+-\d+)', dst_label: 'Рис.', dst_regex: 'Рис\.?\s*(\d+-\d+)'}
-#   tab: {src_regex: '表\s*(\d+-\d+)', dst_label: 'Табл.', dst_regex: 'Табл\.?\s*(\d+-\d+)'}
-
-metadata:
-  title: ""
-  author: ""
-  subject: ""
+target_font: ""       # пусто = авто-поиск подходящего TTF
+match_fonts: true
 ```
 
-Глоссарий — `config/glossary.csv` в формате `source,target` (заголовок необязателен).
+Глоссарий хранится в `config/glossary.csv` в формате `source,target`. Полный набор параметров и комментарии находятся в `config/config.yaml`.
 
-## Конвейер
+## Основной конвейер
 
+```text
+PDF → parse → segment → translate → build → validate → базовый переведённый PDF
+      │       │          │           │
+      │       │          │           └─ RESULT.pdf.layout.json
+      │       │          └─ segments_ru.json + translations.db
+      │       └─ segments.json
+      └─ parse.json
 ```
-PDF ──► [parse] ──► [segment] ──► [translate] ──► [build] ──► _RU.pdf
-              │           │              │            │
-        parse.json   segments.json   translations.db  validate
+
+Промпт переводчика рассматривает входной текст как данные, требует вернуть только `items[{id, translation}]`, применяет переданный глоссарий и запрещает изменять коды, числа, единицы и номера ссылок. Сегменты объединяются в пакеты по `llm_batch_max_items` и `llm_batch_max_chars`; если пакет или отдельный перевод не прошёл разбор/проверки, повторяются только проблемные элементы.
+
+Промежуточные файлы находятся в `intermediate/<hash-исходника>/`. `manifest.json` хранит завершённость, сигнатуру и digest артефакта каждой стадии. `--resume` пропускает только полностью завершённые совместимые стадии; частичный запуск с `--limit` не помечается завершённым.
+
+## Читаемость и переполнение
+
+Основные пределы по умолчанию:
+
+```yaml
+builder_min_fontsize: 8.5
+builder_table_min_fontsize: 7.5
+builder_caption_min_fontsize: 8.0
+builder_heading_min_fontsize: 9.0
+builder_overflow_policy: "appendix"
+builder_overflow_fontsize: 9.0
+validator_min_readable_fontsize: 7.5
+validator_max_residual_source_chars: 0
 ```
 
-Артефакты лежат в `intermediate/<sha256-исходника>/`, поэтому смена PDF
-автоматически инвалидирует кэш стадий. `translations.db` — там же.
+Если перевод не помещается при читаемом минимуме, он не ужимается до микрошрифта: на исходной странице ставится маркер `[T…]`, а полный текст переносится в раздел «Продолжение перевода». Если безопасно поставить маркер нельзя, исходный блок сохраняется и фиксируется в отчёте.
 
-| Этап | Модуль | Результат |
-|---|---|---|
-| 1. Парсинг | `pipeline/pdf/parser.py` | `parse.json` — блоки/спаны/изображения/drawings/таблицы |
-| 2. Сегментация | `pipeline/text/segmenter.py` | `segments.json` — логические сегменты с типами и якорями |
-| 3. Перевод | `pipeline/translate/translator.py` | `segments_ru.json` + `translations.db` |
-| 4. Сборка | `pipeline/pdf/builder.py` | `_RU.pdf` — копия оригинала с переведённым текстом |
-| 5. Валидация | `pipeline/pdf/validator.py` | проверка страниц/изображений/TOC/якорей/метаданных |
+Сборщик создаёт sidecar-отчёт `RESULT.pdf.layout.json` с минимальным использованным кеглем, переполнениями, добавленными страницами и ошибками размещения. Валидатор использует этот отчёт и проверяет, среди прочего, потерю страниц/изображений/закладок, пустые страницы, слишком мелкий текст, остаточный исходный Han-текст и `lost/notfit`.
 
-## Запуск
-
-### Windows
+## Запуск CLI
 
 ```powershell
-start.bat
-```
-(поднимает веб-интерфейс на `http://127.0.0.1:8765`)
+$env:PYTHONUTF8="1"
+$env:PYTHONIOENCODING="utf-8"
+$env:PYTHONPATH="."
 
-### CLI
+# информация о документе
+python -m app.cli --inspect "manual.pdf"
+
+# полный основной конвейер
+python -m app.cli --in "manual.pdf" --out "manual_RU.pdf" --resume
+
+# отдельная проверка готового результата относительно исходника
+python -m app.cli --in "manual.pdf" --validate "manual_RU.pdf"
+```
+
+Для сложных документов также доступен альтернативный режим перевода страниц через Markdown:
 
 ```powershell
-$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; $env:PYTHONPATH="."
-
-# сводка по PDF
-python -m app.cli --inspect "file.pdf"
-
-# полный прогон
-python -m app.cli --in "file.pdf" --out "_RU.pdf" --resume
-
-# только валидация готового
-python -m app.cli --validate "_RU.pdf"
-
-# режим Markdown (страница целиком -> Markdown -> PDF overlay)
-python -m app.cli --in "file.pdf" --out "_RU.pdf" --mode markdown --resume
+python -m app.cli --in "manual.pdf" --out "manual_RU.pdf" --mode markdown --resume
 ```
 
-Режим Markdown переводит каждую страницу PDF целиком через LLM с промптом на
-восстановление структуры (заголовки, таблицы, списки) и оверлеем результата
-поверх исходного PDF. Удобен для документов с «нарисованными» таблицами и
-сложной вёрсткой. Выбирается также в веб-интерфейсе через выпадающий список
-«Режим».
+## Текст внутри изображений: только отдельный постпроцесс
 
-### Веб-интерфейс
+Обычный конвейер не отправляет изображения в vision LLM. Сначала создайте и визуально проверьте базовый переведённый PDF, затем при необходимости запустите отдельную обработку:
+
+```powershell
+python -m app.cli --image-postprocess "manual_RU.pdf" --out "manual_RU_images.pdf"
+```
+
+`--out` обязателен, должен отличаться от входа и не должен указывать на существующий файл. Поэтому базовый `manual_RU.pdf` остаётся неизменным, а результат создаётся как отдельный производный PDF.
+
+Vision-модель должна быть указана явно; значение `llm_model` не используется как неявная замена:
+
+```yaml
+vision_llm_base_url: ""            # пусто = использовать llm_base_url
+vision_llm_api_key: ""
+vision_llm_model: "имя-vision-модели"  # обязательно для постпроцесса
+vision_max_tokens: 2048
+vision_temperature: 0.0
+vision_top_p: 0.9
+vision_request_timeout: 600
+
+vision_confidence_threshold: 0.65
+vision_min_image_size: 64
+vision_min_fontsize: 12
+vision_overlay_padding: 3
+vision_bbox_padding_ratio: 0.04  # закрывает крайние штрихи tight OCR bbox
+vision_text_align: "center"        # center | left
+vision_cache_path: "intermediate/vision_translations.db"
+# vision_report_path: ""           # по умолчанию RESULT.pdf.vision.json
+```
+
+Vision LLM возвращает строгий JSON со списком областей и координатами. Некорректные координаты, низкая уверенность, потерянные коды/числа и неподходящий язык перевода отбрасываются; такие области изображения остаются без изменений. Повторяющиеся PDF-изображения обрабатываются один раз по `xref`.
+
+Рядом с производным PDF создаётся `RESULT.pdf.vision.json` со статистикой, минимальным кеглем, причинами пропуска и ошибками. SQLite-кэш задаётся через `vision_cache_path`; его можно отключить пустым значением.
+
+## Веб-интерфейс
 
 ```powershell
 python -m app.web
 ```
-Откроется `http://127.0.0.1:8765`. Перетащите PDF, нажмите «Перевести»,
-наблюдайте прогресс, скачайте результат по готовности.
 
-### Docker
+Интерфейс доступен по `http://127.0.0.1:8765`. После завершения основного перевода сначала откройте «Просмотреть базовый PDF». Если настроен `vision_llm_model`, после просмотра станет доступна отдельная кнопка «Обработать изображения» с собственным прогрессом, отменой, просмотром и скачиванием производного файла.
 
-```powershell
-docker compose -f docker/docker-compose.yml up --build
-```
-`config/`, `assets/`, `intermediate/`, `log/`, `uploads/` монтируются.
-Если LLM-сервер на хосте, укажи в `config.yaml`:
-`llm_base_url: "http://host.docker.internal:8080/v1"`.
+На Windows можно также запустить `start.bat`.
 
-## Структура проекта
+## Основные файлы
 
-```
-├─ app/
-│  ├─ cli.py            # оркестратор конвейера
-│  └─ web.py            # FastAPI веб-интерфейс
-├─ pipeline/
-│  ├─ anchors.py        # якоря перекрёстных ссылок (зависят от языковой пары)
-│  ├─ config/loader.py  # конфиг + логгер
-│  ├─ io/artifacts.py   # JSON I/O + RESUME по sha256 исходника
-│  ├─ fonts/fonts.py    # поиск TTF
-│  ├─ glossary/glossary.py
-│  ├─ markdown/         # второй режим: PDF -> Markdown -> PDF overlay
-│  ├─ pdf/              # parser, builder, validator, inspect
-│  ├─ text/segmenter.py
-│  └─ translate/translator.py
-├─ config/
-│  ├─ config.yaml
-│  └─ glossary.csv
-├─ docker/
-│  ├─ Dockerfile
-│  └─ docker-compose.yml
-├─ assets/              # TTF-шрифты (опционально)
-├─ intermediate/        # артефакты по хэшу исходника
-├─ log/                 # translate.log, errors.jsonl
-├─ uploads/             # загруженные через веб PDF
-├─ requirements.txt
-├─ start.bat
-└─ README.md
+```text
+app/cli.py                       CLI и оркестрация стадий
+app/web.py                       веб-интерфейс
+pipeline/pdf/parser.py           извлечение структуры PDF
+pipeline/text/segmenter.py       логические сегменты и ячейки таблиц
+pipeline/translate/translator.py пакетный перевод, промпт и проверки
+pipeline/pdf/builder.py          компоновка, шрифты, overflow-приложение
+pipeline/pdf/validator.py        проверка PDF и layout-отчёта
+pipeline/vision/ocr.py           строгий vision JSON и кэш
+pipeline/vision/image_overlay.py отдельная растровая постобработка
+config/config.yaml               основная конфигурация
 ```
 
-## Риски и митигация
-
-| Риск | Решение |
-|---|---|
-| Длинные переведённые фразы не вписываются в ширину | автосжатие `fontsize` через `insert_textbox` |
-| Картинки/вектор затираются redactions | `images=fitz.PDF_REDACT_IMAGE_NONE` + redact строго по bbox |
-| LLM теряет якоря/термины | запрет в промпте + постпроверка + повторный запрос |
-| Шрифт без глифов кириллицы | регистрация TTF DejaVuSans/Arial/Noto |
-| Долгий прогон | SQLite-кэш по sha256 + параллелизм + resume |
-| Кэш врёт при смене исходника | артефакты в `intermediate/<hash>/` — смена PDF сбрасывает кэш |
+Перевод всё равно требует визуального контроля: PDF может содержать нестандартные шрифты, сканы, сложные формы, подписи как векторные кривые или намеренно плотную вёрстку. Отчёты помогают найти такие места, но не заменяют просмотр готового документа.

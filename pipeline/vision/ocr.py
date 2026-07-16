@@ -1,21 +1,12 @@
-"""Vision/OCR pipeline for translating text in PDF images.
-
-Uses an OpenAI-compatible vision model to extract and translate text
-embedded in images (diagrams, screenshots, photos with labels).
-
-Configuration (config.yaml):
-    vision_llm_base_url: "http://127.0.0.1:8080/v1"
-    vision_llm_api_key: "not-needed"
-    vision_llm_model: "llava"  # or "qwen-vl", "gpt-4-vision", etc.
-    vision_max_tokens: 2048
-    vision_temperature: 0.1
-"""
+"""Strict vision OCR / translation of text regions inside raster images."""
 from __future__ import annotations
 
 import base64
 import hashlib
 import io
 import json
+import math
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -28,13 +19,163 @@ from PIL import Image
 from pipeline.config.loader import ROOT
 
 
-VISION_PROMPT = (
-    "You are an expert technical document translator. "
-    "Look at the provided image and translate any visible text from {src_lang} to {tgt_lang}. "
-    "Preserve numbers, labels, arrows, and layout meaning. "
-    "Output ONLY the translated text, one item per line, in the same spatial order as the original. "
-    "If there is no text, output an empty string."
-)
+VISION_PROMPT_VERSION = "vision-regions-v2"
+VISION_PROMPT = """You are a precise OCR and technical-document translation engine.
+Inspect only text that is visibly present in the image. The source language is
+{src_lang}; translate into {tgt_lang}. Return exactly one JSON object and no
+Markdown or commentary:
+{{"regions":[{{"bbox":[x0,y0,x1,y1],"source_text":"...","translation":"...","confidence":0.0}}]}}
+
+Coordinates are normalized integers from 0 to 1000 relative to the complete
+image. The coordinate field must be named "bbox" (not "bbox_2d"). Include one
+tight rectangle per visible text region in reading order.
+Preserve every number, model name, identifier, filename, URL, unit and code
+exactly. Keep the translation concise enough for the same region. Never infer,
+complete or invent obscured text. Do not return unchanged code-only regions.
+If no confidently readable translatable text is visible, return
+{{"regions":[]}}.
+"""
+
+
+_SCRIPT_PATTERNS = {
+    "zh": re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"),
+    "ja": re.compile(r"[\u3040-\u30ff\u31f0-\u31ff\u3400-\u9fff]"),
+    "ko": re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]"),
+    "ru": re.compile(r"[\u0400-\u052f]"),
+    "uk": re.compile(r"[\u0400-\u052f]"),
+    "ar": re.compile(r"[\u0600-\u06ff\u0750-\u077f]"),
+    "he": re.compile(r"[\u0590-\u05ff]"),
+    "hi": re.compile(r"[\u0900-\u097f]"),
+    "th": re.compile(r"[\u0e00-\u0e7f]"),
+}
+_LATIN_LANGS = {
+    "en", "de", "fr", "es", "it", "pt", "nl", "pl", "cs", "sk",
+    "sv", "no", "da", "fi", "tr", "ro", "hu", "id", "vi",
+}
+_LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
+_CRITICAL_TOKEN_RE = re.compile(
+    r"(?<!\w)(?:[A-Za-z]{0,12}[-_/.:]?)?\d+(?:[A-Za-z0-9._:/-]*)(?!\w)")
+
+
+def _base_lang(lang: str) -> str:
+    return (lang or "").lower().replace("_", "-").split("-", 1)[0]
+
+
+def _has_source_script(text: str, source_lang: str) -> bool:
+    lang = _base_lang(source_lang)
+    if lang in {"", "auto", "unknown", "und"}:
+        return any(ch.isalpha() for ch in text)
+    pattern = _SCRIPT_PATTERNS.get(lang)
+    if pattern is not None:
+        return bool(pattern.search(text))
+    if lang in _LATIN_LANGS:
+        return bool(_LATIN_RE.search(text))
+    return any(ch.isalpha() for ch in text)
+
+
+def _critical_tokens(text: str) -> list[str]:
+    return [match.group(0) for match in _CRITICAL_TOKEN_RE.finditer(text or "")]
+
+
+def clean_region(region: Any, source_lang: str, target_lang: str) -> dict | None:
+    """Validate one model region and normalize its values.
+
+    Invalid geometry, missing visible source script and translations which lose
+    numeric / code tokens are rejected instead of being painted onto an image.
+    """
+    if not isinstance(region, dict):
+        return None
+    # Qwen-VL иногда использует своё документированное имя ``bbox_2d`` даже
+    # при явном JSON-контракте. Нормализуем только этот известный алиас; все
+    # требования к диапазону, порядку и размеру координат остаются строгими.
+    bbox = region.get("bbox")
+    if bbox is None:
+        bbox = region.get("bbox_2d")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    try:
+        coords = [float(value) for value in bbox]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in coords):
+        return None
+    if any(value < 0.0 or value > 1000.0 for value in coords):
+        return None
+    x0, y0, x1, y1 = coords
+    if x1 - x0 < 1.0 or y1 - y0 < 1.0:
+        return None
+
+    source_text = str(region.get("source_text") or "").strip()
+    translation = str(region.get("translation") or "").strip()
+    if not source_text or not translation:
+        return None
+    if not _has_source_script(source_text, source_lang):
+        return None
+    if not _has_source_script(translation, target_lang):
+        return None
+    if re.sub(r"\s+", "", source_text).casefold() == re.sub(
+            r"\s+", "", translation).casefold():
+        return None
+    for token in _critical_tokens(source_text):
+        if token not in translation:
+            return None
+    # A very large expansion is a strong hallucination signal, while still
+    # allowing concise source scripts (CJK) to expand naturally.
+    if len(translation) > max(500, len(source_text) * 8 + 80):
+        return None
+
+    try:
+        confidence = float(region.get("confidence"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(confidence):
+        return None
+    confidence = max(0.0, min(1.0, confidence))
+
+    return {
+        "bbox": [x0, y0, x1, y1],
+        "source_text": source_text,
+        "translation": translation,
+        "confidence": confidence,
+    }
+
+
+def _decode_json_object(raw: Any) -> dict | None:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text,
+                          flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def parse_regions(raw: Any, source_lang: str, target_lang: str) -> list[dict]:
+    """Parse the strict JSON object returned by the vision model."""
+    payload = _decode_json_object(raw)
+    if payload is None or not isinstance(payload.get("regions"), list):
+        return []
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for item in payload["regions"][:256]:
+        cleaned = clean_region(item, source_lang, target_lang)
+        if cleaned is None:
+            continue
+        key = (tuple(cleaned["bbox"]), cleaned["source_text"],
+               cleaned["translation"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+    out.sort(key=lambda item: (item["bbox"][1], item["bbox"][0]))
+    return out
 
 
 class VisionCache:
@@ -46,13 +187,20 @@ class VisionCache:
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS vision_translations ("
             "key TEXT PRIMARY KEY, src_img_hash TEXT, src_lang TEXT, tgt_lang TEXT, "
-            "dst TEXT, model TEXT, ts TEXT)")
+            "dst TEXT, model TEXT, prompt_version TEXT DEFAULT '', ts TEXT)")
+        columns = {row[1] for row in self.conn.execute(
+            "PRAGMA table_info(vision_translations)")}
+        if "prompt_version" not in columns:
+            self.conn.execute(
+                "ALTER TABLE vision_translations ADD COLUMN prompt_version TEXT DEFAULT ''")
         self.conn.commit()
 
     @staticmethod
-    def make_key(img_hash: str, src_lang: str, tgt_lang: str, model: str) -> str:
+    def make_key(img_hash: str, src_lang: str, tgt_lang: str, model: str,
+                 prompt_version: str = VISION_PROMPT_VERSION) -> str:
         return hashlib.sha256(
-            f"{img_hash}\x00{src_lang}\x00{tgt_lang}\x00{model}".encode("utf-8")
+            f"{img_hash}\x00{src_lang}\x00{tgt_lang}\x00{model}\x00{prompt_version}"
+            .encode("utf-8")
         ).hexdigest()
 
     def get(self, key: str) -> str | None:
@@ -62,135 +210,176 @@ class VisionCache:
             return row[0] if row else None
 
     def put(self, key: str, img_hash: str, src_lang: str, tgt_lang: str,
-            dst: str, model: str):
+            dst: str, model: str,
+            prompt_version: str = VISION_PROMPT_VERSION) -> None:
         with self._lock:
             self.conn.execute(
                 "INSERT OR REPLACE INTO vision_translations "
-                "(key, src_img_hash, src_lang, tgt_lang, dst, model, ts) "
-                "VALUES (?,?,?,?,?,?,datetime('now'))",
-                (key, img_hash, src_lang, tgt_lang, dst, model))
+                "(key, src_img_hash, src_lang, tgt_lang, dst, model, prompt_version, ts) "
+                "VALUES (?,?,?,?,?,?,?,datetime('now'))",
+                (key, img_hash, src_lang, tgt_lang, dst, model, prompt_version))
             self.conn.commit()
 
-    def close(self):
+    def close(self) -> None:
         with self._lock:
             self.conn.close()
 
 
 class VisionTranslator:
+    """Vision client returning sanitized region dictionaries."""
+
     def __init__(self, cfg: dict):
         self.cfg = cfg
         base_url = cfg.get("vision_llm_base_url") or cfg.get("llm_base_url")
-        api_key = cfg.get("vision_llm_api_key") or cfg.get("llm_api_key", "not-needed")
-        self.model = cfg.get("vision_llm_model") or cfg.get("llm_model")
-        self.client = OpenAI(base_url=base_url, api_key=api_key,
-                             timeout=cfg.get("vision_request_timeout", 600))
-        self.max_tokens = int(cfg.get("vision_max_tokens", 2048))
-        self.temperature = float(cfg.get("vision_temperature", 0.1))
-        self.top_p = float(cfg.get("vision_top_p", 0.9))
+        api_key = cfg.get("vision_llm_api_key") or cfg.get(
+            "llm_api_key", "not-needed")
+        # Never send images to an implicitly inherited text-only model.
+        self.model = cfg.get("vision_llm_model")
         self.enabled = bool(base_url and self.model)
+        self.client = (OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=cfg.get("vision_request_timeout", 600),
+        ) if self.enabled else None)
+        self.max_tokens = int(cfg.get("vision_max_tokens", 2048))
+        self.temperature = float(cfg.get("vision_temperature", 0.0))
+        self.top_p = float(cfg.get("vision_top_p", 0.9))
+        self.prompt_version = VISION_PROMPT_VERSION
 
-    def _encode_image(self, image: Image.Image) -> str:
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    @staticmethod
+    def _image_png(image: Image.Image) -> bytes:
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    @staticmethod
+    def _response_text(response) -> str:
+        content = response.choices[0].message.content
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            chunks = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    chunks.append(str(item.get("text") or ""))
+                elif getattr(item, "text", None):
+                    chunks.append(str(item.text))
+            return "".join(chunks).strip()
+        return ""
 
     def translate_image(self, image: Image.Image, src_lang: str, tgt_lang: str,
-                        cache: VisionCache | None = None) -> str:
-        if not self.enabled:
-            return ""
-        img_bytes = io.BytesIO()
-        image.save(img_bytes, format="PNG")
-        img_hash = hashlib.sha256(img_bytes.getvalue()).hexdigest()
-        key = VisionCache.make_key(img_hash, src_lang, tgt_lang, self.model)
+                        cache: VisionCache | None = None) -> list[dict]:
+        if not self.enabled or self.client is None:
+            return []
+        image_bytes = self._image_png(image)
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
+        key = VisionCache.make_key(
+            image_hash, src_lang, tgt_lang, str(self.model), self.prompt_version)
         if cache:
             cached = cache.get(key)
-            if cached is not None:
-                return cached
+            if cached is not None and _decode_json_object(cached) is not None:
+                return parse_regions(cached, src_lang, tgt_lang)
 
         prompt = VISION_PROMPT.format(src_lang=src_lang, tgt_lang=tgt_lang)
-        b64 = self._encode_image(image)
+        encoded = base64.b64encode(image_bytes).decode("ascii")
         try:
-            resp = self.client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-                    ]},
+                    {"role": "user", "content": [{
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{encoded}",
+                        },
+                    }]},
                 ],
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 top_p=self.top_p,
             )
-            out = (resp.choices[0].message.content or "").strip()
-        except Exception as e:
-            out = ""
-            # Re-raise so caller can log
-            raise RuntimeError(f"Vision LLM call failed: {e}") from e
+        except Exception as exc:
+            raise RuntimeError(f"Vision LLM call failed: {exc}") from exc
 
+        raw = self._response_text(response)
+        payload = _decode_json_object(raw)
+        if payload is None or not isinstance(payload.get("regions"), list):
+            raise RuntimeError("Vision LLM returned invalid regions JSON")
+        regions = parse_regions(payload, src_lang, tgt_lang)
+        serialized = json.dumps({
+            "prompt_version": self.prompt_version,
+            "regions": regions,
+        }, ensure_ascii=False, separators=(",", ":"))
         if cache:
-            cache.put(key, img_hash, src_lang, tgt_lang, out, self.model)
-        return out
+            cache.put(key, image_hash, src_lang, tgt_lang, serialized,
+                      str(self.model), self.prompt_version)
+        return regions
+
+
+def _pixmap_to_image(pix: fitz.Pixmap) -> Image.Image:
+    if pix.colorspace is not None and pix.colorspace.n > 3:
+        pix = fitz.Pixmap(fitz.csRGB, pix)
+    if pix.alpha and pix.n == 4:
+        return Image.frombytes("RGBA", (pix.width, pix.height), pix.samples)
+    if pix.colorspace is not None and pix.colorspace.n == 1:
+        return Image.frombytes("L", (pix.width, pix.height), pix.samples).convert("RGB")
+    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
 
 def extract_images_from_pdf(pdf_path: str, min_size: int = 100) -> list[dict[str, Any]]:
-    """Extract images from PDF with their page number and bbox.
-
-    Returns list of dicts: {"page", "xref", "bbox", "image": PIL.Image}
-    """
+    """Extract raster images with page, xref, placement bbox and PIL image."""
     doc = fitz.open(str(pdf_path))
     results: list[dict[str, Any]] = []
-    for pno in range(doc.page_count):
-        page = doc.load_page(pno)
-        for img in page.get_images(full=True):
-            xref = img[0]
-            try:
-                pix = fitz.Pixmap(doc, xref)
-                if pix.n > 4:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                if pil_img.width >= min_size and pil_img.height >= min_size:
+    try:
+        for page_number in range(doc.page_count):
+            page = doc.load_page(page_number)
+            for item in page.get_images(full=True):
+                xref = item[0]
+                try:
+                    image = _pixmap_to_image(fitz.Pixmap(doc, xref))
+                    if image.width < min_size or image.height < min_size:
+                        continue
                     rects = page.get_image_rects(xref)
-                    bbox = [rects[0].x0, rects[0].y0, rects[0].x1, rects[0].y1] if rects else None
-                    results.append({"page": pno, "xref": xref, "bbox": bbox,
-                                    "image": pil_img})
-                pix = None
-            except Exception:
-                continue
-    doc.close()
+                    bbox = ([rects[0].x0, rects[0].y0,
+                             rects[0].x1, rects[0].y1] if rects else None)
+                    results.append({
+                        "page": page_number,
+                        "xref": xref,
+                        "bbox": bbox,
+                        "image": image,
+                    })
+                except Exception:
+                    continue
+    finally:
+        doc.close()
     return results
 
 
 def extract_and_translate_images(pdf_path: str, cfg: dict,
                                  cache_path: str | None = None) -> list[dict[str, Any]]:
-    """High-level helper: extract all images, translate text in them.
-
-    Returns list of translation records with page, bbox, translated text.
-    """
-    src_lang = cfg.get("source_lang", "zh")
-    tgt_lang = cfg.get("target_lang", "ru")
+    """Compatibility helper returning translated regions for extracted images."""
+    source_lang = cfg.get("source_lang", "zh")
+    target_lang = cfg.get("target_lang", "ru")
     translator = VisionTranslator(cfg)
     if not translator.enabled:
         return []
-
     cache = VisionCache(cache_path) if cache_path else None
     try:
-        images = extract_images_from_pdf(pdf_path)
-        out = []
-        for item in images:
+        output = []
+        for item in extract_images_from_pdf(pdf_path):
             try:
-                translated = translator.translate_image(
-                    item["image"], src_lang, tgt_lang, cache)
-                if translated:
-                    out.append({
-                        "page": item["page"],
-                        "xref": item["xref"],
-                        "bbox": item["bbox"],
-                        "text": translated,
-                    })
+                regions = translator.translate_image(
+                    item["image"], source_lang, target_lang, cache)
             except Exception:
                 continue
-        return out
+            if regions:
+                output.append({
+                    "page": item["page"],
+                    "xref": item["xref"],
+                    "bbox": item["bbox"],
+                    "regions": regions,
+                })
+        return output
     finally:
         if cache:
             cache.close()
@@ -198,12 +387,16 @@ def extract_and_translate_images(pdf_path: str, cfg: dict,
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="Vision OCR test")
-    ap.add_argument("--pdf", required=True)
-    ap.add_argument("--config")
-    args = ap.parse_args()
     from pipeline.config.loader import load_config
-    cfg = load_config(args.config)
-    results = extract_and_translate_images(args.pdf, cfg,
-                                           cache_path=str(ROOT / "intermediate" / "vision_cache.db"))
-    print(json.dumps(results, ensure_ascii=False, indent=2))
+
+    argument_parser = argparse.ArgumentParser(description="Vision OCR test")
+    argument_parser.add_argument("--pdf", required=True)
+    argument_parser.add_argument("--config")
+    arguments = argument_parser.parse_args()
+    configuration = load_config(arguments.config)
+    result = extract_and_translate_images(
+        arguments.pdf,
+        configuration,
+        cache_path=str(ROOT / "intermediate" / "vision_cache.db"),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))

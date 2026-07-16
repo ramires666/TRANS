@@ -5,6 +5,7 @@ header (`zh,ru`, `source,target`, `en,ru`) — пропускаем, иначе 
 """
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 from pipeline.config.loader import resolve_path
@@ -15,26 +16,32 @@ def load_glossary(path: str | Path) -> dict[str, str]:
     g: dict[str, str] = {}
     if not p.exists():
         return g
-    with open(p, "r", encoding="utf-8") as fh:
-        lines = fh.readlines()
-    if not lines:
-        return g
-
-    first = lines[0].strip()
-    if "," in first:
-        head_a, head_b = (s.strip().lower() for s in first.split(",", 1))
-        if head_a in ("zh", "source", "src", "en", "ja", "de", "fr") and head_b in (
-            "ru", "target", "dst", "en", "de", "fr"
-        ):
-            lines = lines[1:]
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(",", 1)
-        if len(parts) == 2:
-            k, v = parts[0].strip(), parts[1].strip()
-            if k and v:
-                g[k] = v
+    source_headers = {
+        "zh", "source", "src", "source_language",
+        "en", "ja", "de", "fr",
+    }
+    target_headers = {
+        "ru", "target", "dst", "target_language",
+        "en", "de", "fr",
+    }
+    first_data_row = True
+    # utf-8-sig прозрачно снимает BOM; newline="" требуется модулю csv для
+    # корректной обработки quoted-полей и переводов строк внутри кавычек.
+    with open(p, "r", encoding="utf-8-sig", newline="") as fh:
+        for row in csv.reader(fh):
+            if not row or not any(cell.strip() for cell in row):
+                continue
+            if len(row) < 2:
+                continue
+            source = row[0].strip()
+            # Сохраняем прежнюю терпимость к неэкранированным запятым в target,
+            # но корректный CSV с quoted comma остаётся предпочтительным.
+            target = ",".join(row[1:]).strip()
+            if first_data_row:
+                first_data_row = False
+                if (source.lower() in source_headers
+                        and target.lower() in target_headers):
+                    continue
+            if source and target:
+                g[source] = target
     return g

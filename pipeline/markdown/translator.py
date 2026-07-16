@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import json
+import re
 from pathlib import Path
 
 import fitz
@@ -15,20 +15,34 @@ from pipeline.io.artifacts import artifact_paths, load_json, save_json, source_h
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "SYSTEM: Ты — эксперт по анализу документов и профессиональный переводчик с китайского на русский. \n"
-    "Тебе передан текст страницы PDF, извлеченный парсером. Из-за особенностей формата структура таблиц и абзацев могла немного нарушиться.\n\n"
-    "Твоя задача:\n"
-    "1. Визуально восстанови логику документа. Найди, где были таблицы, заголовки и списки.\n"
-    "2. Переведи весь текст на русский язык, сохраняя технический/бизнес контекст.\n"
-    "3. Оформи результат строго в Markdown:\n"
-    "   - Все таблицы собери в классические Markdown-таблицы (| Заголовок | Заголовок |).\n"
-    "   - Заголовки разметь как #, ##, ###.\n"
-    "4. Не добавляй никаких своих мыслей, пояснений или вводных слов. Только готовый Markdown-перевод."
+    "Ты — профессиональный переводчик технических документов с языка "
+    "{source_language} на язык {target_language}. Переведи весь естественный "
+    "текст страницы, включая фразы на других исходных языках, точно и лаконично. "
+    "Сохраняй коды, числа, единицы, ссылки и имена параметров. Не добавляй и не "
+    "додумывай сведения. Сохрани логические заголовки, списки и таблицы в Markdown, "
+    "но не пытайся воспроизводить визуальные переносы строк PDF. Верни только готовый "
+    "Markdown без служебных заголовков, пояснений и внешнего code fence."
 )
 
 
 def _clean_markdown(md: str) -> str:
     """Удаляет частые вводные слова, которые LLM добавляет несмотря на запрет."""
+    md = (md or "").lstrip("\ufeff").strip()
+    for _ in range(2):
+        md = re.sub(
+            r"^\s*(?:markdown|translation|перевод|ответ)\s*:\s*",
+            "",
+            md,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        fence = re.match(
+            r"^```(?:markdown|md|text)?\s*\n?(.*?)\n?```$",
+            md,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if fence:
+            md = fence.group(1).strip()
     lines = md.splitlines()
     # Удаляем пустые строки в начале
     while lines and not lines[0].strip():
@@ -70,11 +84,13 @@ def _page_text(page: fitz.Page) -> str:
 
 
 def _make_user_prompt(text: str, page_num: int, total: int) -> str:
+    # page_num/total остаются в сигнатуре для обратной совместимости, но служебная
+    # нумерация не должна попадать в переводимый payload и затем в PDF.
     return (
-        f"Страница {page_num + 1} из {total}.\n\n"
-        f"{text}\n\n"
-        "Переведи и оформи результат строго в Markdown. "
-        "Не добавляй заголовков вроде 'Текст страницы', 'Перевод' и т.п."
+        "<document_page>\n"
+        f"{text}\n"
+        "</document_page>\n"
+        "Переведи только содержимое document_page и верни только Markdown."
     )
 
 
@@ -94,7 +110,11 @@ class MarkdownTranslator:
         self.max_tokens = int(cfg.get("markdown_max_tokens", cfg.get("max_tokens", 4096)))
         self.temperature = float(cfg.get("markdown_temperature", cfg.get("temperature", 0.2)))
         self.top_p = float(cfg.get("markdown_top_p", cfg.get("top_p", 0.9)))
-        self.system_prompt = cfg.get("markdown_system_prompt", DEFAULT_SYSTEM_PROMPT)
+        custom_prompt = cfg.get("markdown_system_prompt")
+        self.system_prompt = custom_prompt or DEFAULT_SYSTEM_PROMPT.format(
+            source_language=cfg.get("source_lang", "zh"),
+            target_language=cfg.get("target_lang", "ru"),
+        )
 
     def translate_page(self, text: str, page_num: int, total: int) -> str:
         """Один LLM-вызов на страницу. Возвращает Markdown."""
@@ -117,7 +137,12 @@ class MarkdownTranslator:
             except Exception:
                 pass
         resp = self.client.chat.completions.create(**kwargs)
-        return _clean_markdown(resp.choices[0].message.content or "")
+        if not getattr(resp, "choices", None):
+            raise RuntimeError("Markdown LLM returned no choices")
+        choice = resp.choices[0]
+        if getattr(choice, "finish_reason", None) == "length":
+            raise RuntimeError("Markdown LLM finish_reason=length")
+        return _clean_markdown(choice.message.content or "")
 
 
 def translate_pdf(pdf_path: str, cfg: dict, logger,

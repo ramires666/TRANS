@@ -14,6 +14,9 @@ uploads/
 # Результаты
 _RU.pdf
 *.pdf
+*.layout.json
+*.vision.json
+output/
 
 # Системный мусор
 .DS_Store
@@ -26,3 +29,5 @@ Thumbs.db
 # Сводки-инспекции (генерируются)
 _inspect.txt
 _toc.txt
+
+tmp/*

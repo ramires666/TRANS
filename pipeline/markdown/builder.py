@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import argparse
-import re
+import os
+import tempfile
 from pathlib import Path
 
 import fitz
@@ -82,7 +83,7 @@ def _text_blocks_bbox(page: fitz.Page) -> fitz.Rect:
 
 
 def _avg_font_size(page: fitz.Page) -> float:
-    """Средний размер шрифта на странице."""
+    """Доминирующий размер, взвешенный по содержательным символам."""
     d = page.get_text("dict")
     sizes = []
     for b in d.get("blocks", []):
@@ -91,11 +92,13 @@ def _avg_font_size(page: fitz.Page) -> float:
         for ln in b.get("lines", []):
             for sp in ln.get("spans", []):
                 sz = float(sp.get("size", 0))
-                if sz > 0:
-                    sizes.append(sz)
+                text = (sp.get("text") or "").strip()
+                if sz > 0 and text:
+                    sizes.extend([sz] * max(1, min(len(text), 200)))
     if not sizes:
         return 10.0
-    return sum(sizes) / len(sizes)
+    sizes.sort()
+    return sizes[len(sizes) // 2]
 
 
 def _clean_text(page: fitz.Page) -> None:
@@ -104,12 +107,16 @@ def _clean_text(page: fitz.Page) -> None:
     for b in d.get("blocks", []):
         if b.get("type") == 0 and b.get("lines"):
             try:
-                page.add_redact_annot(fitz.Rect(b["bbox"]), fill=(1, 1, 1))
+                page.add_redact_annot(
+                    fitz.Rect(b["bbox"]), fill=None, cross_out=False)
             except Exception:
                 pass
     if page.annots:
         try:
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            page.apply_redactions(
+                images=fitz.PDF_REDACT_IMAGE_NONE,
+                graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+                text=fitz.PDF_REDACT_TEXT_REMOVE)
         except Exception:
             pass
 
@@ -130,16 +137,22 @@ def build_pdf(pdf_path: str, pages_md: dict[int, str], cfg: dict, logger,
     """
     src_pdf = resolve_path(pdf_path)
     out_path = resolve_path(out_path or cfg.get("out_path", "_RU.pdf"))
+    if os.path.normcase(str(src_pdf.resolve())) == os.path.normcase(
+            str(out_path.resolve())):
+        raise ValueError("Выходной PDF не должен перезаписывать исходный файл")
 
-    font_path = cfg.get("target_font") or find_target_font("")
+    target_lang = cfg.get("target_lang", "ru")
+    font_path = find_target_font(cfg.get("target_font") or "", target_lang)
     font_family = _font_family_name(font_path)
+    font_file = Path(font_path)
+    font_archive = fitz.Archive(str(font_file.parent))
     logger.info("[markdown builder] Шрифт: %s (family=%s)", font_path, font_family)
 
     logger.info("[markdown builder] Открываю исходник: %s", src_pdf)
     doc = fitz.open(str(src_pdf))
 
     default_fontsize = float(cfg.get("builder_default_fontsize", 10.0))
-    min_fontsize = float(cfg.get("builder_min_fontsize", 6.0))
+    min_fontsize = float(cfg.get("builder_min_fontsize", 8.5))
 
     for pno in range(doc.page_count):
         if pno not in pages_md:
@@ -152,11 +165,9 @@ def build_pdf(pdf_path: str, pages_md: dict[int, str], cfg: dict, logger,
             logger.info("[markdown builder] Страница %d пустая — skip", pno + 1)
             continue
 
-        # 1. Удаляем старый текст
-        _clean_text(page)
-
-        # 2. Определяем область для нового текста
+        # Геометрию и типографику нужно измерить ДО удаления исходного текста.
         text_rect = _text_blocks_bbox(page)
+        avg_size = _avg_font_size(page)
         # Если страница почти целиком текст — берём page.rect с полями
         if text_rect.width < 20 or text_rect.height < 20:
             margin = 36  # 0.5 inch
@@ -164,38 +175,41 @@ def build_pdf(pdf_path: str, pages_md: dict[int, str], cfg: dict, logger,
                 page.rect.x0 + margin, page.rect.y0 + margin,
                 page.rect.x1 - margin, page.rect.y1 - margin)
 
-        # 3. Размер шрифта (немного уменьшаем относительно среднего,
-        #                    чтобы русский перевод влезал лучше)
-        avg_size = _avg_font_size(page)
+        # Размер шрифта немного ниже доминирующего исходного, но не микроскопический.
         font_size = avg_size * 0.85 if avg_size > 0 else default_fontsize
         font_size = max(min_fontsize, min(font_size, default_fontsize * 1.1))
 
-        # 4-6. Вставляем HTML с автоподбором размера шрифта
+        # Preflight на временной странице: scale_low=1 запрещает неявное
+        # микромасштабирование insert_htmlbox.
         inserted = False
+        selected: tuple[fitz.Rect, str, str, float] | None = None
         current_size = font_size
         max_rect = fitz.Rect(
             page.rect.x0 + 18, page.rect.y0 + 18,
             page.rect.x1 - 18, page.rect.y1 - 18)
         while current_size >= min_fontsize and not inserted:
-            css = _default_css(font_family, current_size)
+            css = (
+                f"@font-face {{font-family: '{font_family}'; "
+                f"src: url('{font_file.name}');}}\n" +
+                _default_css(font_family, current_size)
+            )
             html = _md_to_html(md, css)
+            tmp_doc = fitz.open()
+            tmp_page = tmp_doc.new_page(
+                width=page.rect.width, height=page.rect.height)
             try:
-                spare, scale = page.insert_htmlbox(text_rect, html, css=css)
+                spare, scale = tmp_page.insert_htmlbox(
+                    text_rect, html, css=css, archive=font_archive, scale_low=1)
                 if spare >= 0:
-                    logger.debug(
-                        "[markdown builder] Страница %d вставлена "
-                        "(size=%.1f, spare=%.1f, scale=%.3f)",
-                        pno + 1, current_size, spare, scale)
+                    selected = (fitz.Rect(text_rect), html, css, current_size)
                     inserted = True
                     break
                 # Не влезло — пробуем во всей странице или уменьшаем шрифт
                 if text_rect != max_rect:
-                    spare2, scale2 = page.insert_htmlbox(max_rect, html, css=css)
+                    spare2, scale2 = tmp_page.insert_htmlbox(
+                        max_rect, html, css=css, archive=font_archive, scale_low=1)
                     if spare2 >= 0:
-                        logger.debug(
-                            "[markdown builder] Страница %d вставлена в max_rect "
-                            "(size=%.1f, spare=%.1f, scale=%.3f)",
-                            pno + 1, current_size, spare2, scale2)
+                        selected = (fitz.Rect(max_rect), html, css, current_size)
                         inserted = True
                         break
                 current_size *= 0.9
@@ -204,10 +218,23 @@ def build_pdf(pdf_path: str, pages_md: dict[int, str], cfg: dict, logger,
                     "[markdown builder] Ошибка вставки HTML на страницу %d: %s",
                     pno + 1, e)
                 break
+            finally:
+                tmp_doc.close()
+        if selected is not None:
+            rect, html, css, selected_size = selected
+            _clean_text(page)
+            spare, scale = page.insert_htmlbox(
+                rect, html, css=css, archive=font_archive, scale_low=1)
+            inserted = spare >= 0
+            logger.debug(
+                "[markdown builder] Страница %d вставлена "
+                "(size=%.1f, spare=%.1f, scale=%.3f)",
+                pno + 1, selected_size, spare, scale)
         if not inserted:
             logger.warning(
                 "[markdown builder] Не удалось вставить Markdown на страницу %d "
-                "(достигнут min_fontsize=%.1f)", pno + 1, min_fontsize)
+                "без шрифта ниже %.1f pt; исходный текст сохранён",
+                pno + 1, min_fontsize)
 
         if (pno + 1) % 20 == 0:
             logger.info("[markdown builder] build page %d/%d", pno + 1, doc.page_count)
@@ -225,8 +252,37 @@ def build_pdf(pdf_path: str, pages_md: dict[int, str], cfg: dict, logger,
         logger.warning("[markdown builder] set_metadata: %s", e)
 
     logger.info("[markdown builder] Сохраняю %s", out_path)
-    doc.save(str(out_path), garbage=4, deflate=True)
-    doc.close()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_pages = doc.page_count
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{out_path.stem}.", suffix=".tmp.pdf", dir=str(out_path.parent))
+    os.close(fd)
+    temporary_path = Path(temporary_name)
+    try:
+        temporary_path.unlink(missing_ok=True)
+        doc.save(str(temporary_path), garbage=4, deflate=True)
+        doc.close()
+        verification = fitz.open(str(temporary_path))
+        try:
+            if verification.page_count != expected_pages:
+                raise RuntimeError(
+                    "Markdown PDF verification failed: "
+                    f"pages={verification.page_count}, expected={expected_pages}")
+            for page_number in range(verification.page_count):
+                verification.load_page(page_number)
+        finally:
+            verification.close()
+        os.replace(temporary_path, out_path)
+    except Exception:
+        try:
+            doc.close()
+        except Exception:
+            pass
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     logger.info("[markdown builder] Готово: %s", out_path)
     return str(out_path)
 
