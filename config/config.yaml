@@ -20,7 +20,7 @@ target_lang: "ru"      # ru, en, de, fr, es, ja ...
 #     dst_regex: 'Табл\.?\s*(\d+-\d+)'
 
 # LLM (OpenAI-совместимый эндпоинт) — для текста
-llm_base_url: "http://127.0.0.1:8080/v1"
+llm_base_url: "http://127.0.0.1:9090/v1"
 llm_api_key: "not-needed"
 llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
 enable_thinking: false
@@ -50,7 +50,14 @@ vision_llm_api_key: ""
 # Текущая локальная Qwen проверена live-smoke как multimodal. Это явная
 # настройка: основной pipeline всё равно не вызывает vision автоматически.
 vision_llm_model: "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
-vision_max_tokens: 2048
+vision_max_tokens: 4096
+vision_retry_max_tokens: 8192
+vision_max_attempts: 2
+vision_enable_thinking: false
+vision_json_schema: true
+# false: любой необработанный из-за ошибки растр делает опциональный шаг
+# неуспешным; исходный основной PDF при этом остаётся доступен.
+vision_allow_partial: false
 vision_temperature: 0.0
 vision_top_p: 0.9
 vision_request_timeout: 600
@@ -58,7 +65,9 @@ vision_confidence_threshold: 0.65
 vision_min_image_size: 64
 vision_min_fontsize: 12
 vision_overlay_padding: 3
-vision_bbox_padding_ratio: 0.04  # внешний запас вокруг tight OCR bbox
+# Русский UI-текст обычно длиннее китайского; 18% даёт достаточно места для
+# подписи, сохраняя читаемый минимум 12 px.
+vision_bbox_padding_ratio: 0.18
 vision_text_align: "center"  # center | left
 vision_cache_path: "intermediate/vision_translations.db"
 

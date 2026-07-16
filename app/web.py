@@ -42,79 +42,117 @@ HTML_PAGE = r"""<!doctype html>
 <title>PDF переводчик</title>
 <style>
   :root{
-    --bg:#0f172a; --panel:#1e293b; --panel2:#273449; --border:#334155;
-    --text:#e2e8f0; --muted:#94a3b8; --accent:#6366f1; --accent2:#22c55e;
-    --warn:#f59e0b; --err:#ef4444;
+    color-scheme:light;
+    --bg:#f5f5f3; --panel:#ffffff; --panel2:#f8f8f7; --border:#dededb;
+    --border-strong:#c8c8c4; --text:#181817; --muted:#6f6f6a;
+    --accent:#2457d6; --accent-hover:#1d46ad; --accent-soft:#eef3ff;
+    --accent2:#18794e; --success-soft:#edf8f2; --warn:#9a6700;
+    --warn-soft:#fff8e6; --err:#c93c37; --error-soft:#fff1f0;
+    --shadow:0 1px 2px rgba(24,24,23,.04),0 12px 32px rgba(24,24,23,.06);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+  html{background:var(--bg)}
+  html,body{margin:0;padding:0;color:var(--text);
+    font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
   body{min-height:100vh;display:flex;flex-direction:column;align-items:center}
-  .wrap{width:min(880px,94vw);padding:32px 16px 64px}
+  .wrap{width:min(980px,calc(100% - 32px));padding:52px 0 36px}
   .topbar{display:flex;align-items:center;justify-content:space-between;
-    gap:12px;flex-wrap:wrap;margin-bottom:4px}
-  h1{font-size:1.6rem;margin:8px 0 4px;letter-spacing:.2px}
-  .lang-switch{display:inline-flex;background:var(--panel2);border:1px solid
-    var(--border);border-radius:99px;padding:3px;gap:2px;flex-shrink:0}
-  .lang-switch button{padding:5px 14px;border-radius:99px;background:transparent;
-    color:var(--muted);font-weight:600;font-size:.8rem;border:0;cursor:pointer;
-    transition:.15s}
-  .lang-switch button.active{background:var(--accent);color:#fff}
-  .sub{color:var(--muted);margin:0 0 24px;font-size:.95rem}
+    gap:20px;margin-bottom:8px}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .brand-mark{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;
+    border-radius:10px;background:var(--text);color:#fff}
+  .brand-mark svg{width:20px;height:20px}
+  h1{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    font-size:1.45rem;line-height:1.2;margin:0;letter-spacing:-.025em;font-weight:680}
+  .lang-switch{display:inline-flex;background:#ececea;border:1px solid var(--border);
+    border-radius:8px;padding:3px;gap:2px;flex-shrink:0}
+  .lang-switch button{min-height:30px;padding:4px 11px;border-radius:6px;
+    background:transparent;color:var(--muted);font-weight:650;font-size:.75rem;
+    line-height:1;border:0;box-shadow:none}
+  .lang-switch button:hover:not(:disabled){background:rgba(255,255,255,.62);color:var(--text)}
+  .lang-switch button.active{background:var(--panel);color:var(--text);
+    box-shadow:0 1px 2px rgba(24,24,23,.09)}
+  .sub{color:var(--muted);margin:0 0 28px;padding-left:50px;
+    font-size:.91rem;line-height:1.5}
   .card{background:var(--panel);border:1px solid var(--border);
-    border-radius:14px;padding:22px;margin-bottom:18px}
-  .drop{border:2px dashed var(--border);border-radius:12px;padding:34px;
-    text-align:center;cursor:pointer;transition:.2s;background:var(--panel2)}
-  .drop:hover,.drop.over{border-color:var(--accent);background:#2c3a52}
-  .drop .big{font-size:2.4rem;margin-bottom:6px}
-  .drop p{margin:4px 0;color:var(--muted)}
-  .file-name{margin-top:12px;font-size:.95rem;color:var(--text);word-break:break-all}
+    border-radius:14px;padding:24px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .drop{border:1px dashed var(--border-strong);border-radius:10px;padding:38px 24px;
+    text-align:center;cursor:pointer;transition:border-color .16s,background .16s;
+    background:var(--panel2);outline:none}
+  .drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+  .drop:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px rgba(36,87,214,.15)}
+  .drop .big{width:44px;height:44px;display:grid;place-items:center;margin:0 auto 14px;
+    color:var(--accent);background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;box-shadow:0 1px 2px rgba(24,24,23,.06)}
+  .drop .big svg{width:22px;height:22px}
+  .drop p{margin:4px 0;color:var(--muted);font-size:.91rem}
+  .drop p b{color:var(--text);font-weight:640}
+  .drop .sub{padding:0;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase}
+  .file-name{display:flex;align-items:center;margin-top:12px;padding:10px 12px;
+    border:1px solid var(--border);border-radius:8px;background:var(--panel2);
+    font-size:.86rem;font-weight:550;color:var(--text);word-break:break-all}
+  .file-name:empty{display:none}
+  .file-name::before{content:"PDF";flex:0 0 auto;margin-right:9px;padding:3px 5px;
+    border-radius:4px;background:var(--error-soft);color:var(--err);
+    font-size:.64rem;font-weight:750;letter-spacing:.04em}
   input[type=file]{display:none}
-  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:16px}
-  button{font:inherit;padding:11px 22px;border-radius:10px;border:0;cursor:pointer;
-    background:var(--accent);color:white;font-weight:600;transition:.15s}
-  button:hover:not(:disabled){filter:brightness(1.08)}
-  button:disabled{opacity:.45;cursor:not-allowed}
-  button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
-  button#resetBtn{border-color:var(--err);color:var(--err)}
-  button#resetBtn:hover:not(:disabled){background:var(--err);color:#fff}
-  .opts{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);
-    font-size:.9rem;margin-top:14px}
-  .opts label{display:flex;align-items:center;gap:6px;cursor:pointer}
-  .opts input[type=number]{width:90px;background:var(--panel2);
-    border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px}
-  .stage-list{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 4px}
-  .stage{flex:1;min-width:120px;background:var(--panel2);border:1px solid var(--border);
-    border-radius:8px;padding:9px 10px;font-size:.82rem;text-align:center;color:var(--muted)}
-  .stage .t{font-weight:600;color:var(--text);display:block;margin-bottom:2px}
-  .stage.active{border-color:var(--accent);color:var(--text);
-    box-shadow:0 0 0 2px rgba(99,102,241,.25)}
-  .stage.done{border-color:var(--accent2);color:var(--accent2)}
-  .stage.err{border-color:var(--err);color:var(--err)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:20px}
+  button{min-height:40px;font:inherit;padding:9px 16px;border-radius:8px;
+    border:1px solid var(--accent);cursor:pointer;background:var(--accent);color:#fff;
+    font-size:.88rem;font-weight:630;transition:background .15s,border-color .15s,
+    color .15s,box-shadow .15s,transform .15s}
+  button:hover:not(:disabled){background:var(--accent-hover);border-color:var(--accent-hover)}
+  button:active:not(:disabled){transform:translateY(1px)}
+  button:focus-visible{outline:0;box-shadow:0 0 0 3px rgba(36,87,214,.18)}
+  button:disabled{opacity:.42;cursor:not-allowed}
+  button.ghost{background:var(--panel);color:var(--text);border-color:var(--border-strong)}
+  button.ghost:hover:not(:disabled){background:var(--panel2);border-color:#aaa9a4}
+  button#resetBtn{margin-left:auto;color:var(--err);border-color:#e9c3c0}
+  button#resetBtn:hover:not(:disabled){background:var(--error-soft);border-color:#dfaaa6}
+  .opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;
+    color:var(--muted);font-size:.86rem;margin-top:18px;padding:18px 0 0;
+    border-top:1px solid #ebebe8}
+  .opts label{display:flex;min-height:34px;align-items:center;gap:8px;cursor:pointer}
+  input[type=checkbox]{width:16px;height:16px;margin:0;accent-color:var(--accent)}
+  input[type=number],select{height:34px;background:var(--panel);border:1px solid
+    var(--border-strong);color:var(--text);border-radius:7px;padding:5px 9px;
+    font:inherit;font-size:.84rem;outline:none}
+  .opts input[type=number]{width:82px;margin-left:auto}
+  .opts select{width:min(220px,100%);margin-left:auto}
+  input[type=number]:focus,select:focus{border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(36,87,214,.12)}
+  .stage-list{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:18px 0 8px}
+  .stage{min-width:0;background:var(--panel2);border:1px solid var(--border);
+    border-radius:8px;padding:10px;font-size:.73rem;line-height:1.4;
+    text-align:left;color:var(--muted);transition:.18s}
+  .stage .t{font-weight:650;color:var(--text);display:block;margin-bottom:2px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stage.active{border-color:#9cb4ed;background:var(--accent-soft);color:var(--accent);
+    box-shadow:inset 3px 0 0 var(--accent)}
+  .stage.done{border-color:#b8d9c8;background:var(--success-soft);color:var(--accent2)}
+  .stage.err{border-color:#e7b7b3;background:var(--error-soft);color:var(--err)}
   .stage .spin{display:inline-block;width:12px;height:12px;border:2px solid
-    var(--accent);border-top-color:transparent;border-radius:50%;
-    animation:spin .8s linear infinite;vertical-align:middle;margin-left:5px}
+    currentColor;border-top-color:transparent;border-radius:50%;
+    animation:spin .8s linear infinite;vertical-align:-2px;margin-left:5px}
   .stage.done .spin{display:none}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .prog-wrap{background:var(--panel2);border-radius:99px;height:22px;
-    overflow:hidden;margin:14px 0 6px;border:1px solid var(--border);position:relative}
-  .prog{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));
+  .prog-wrap{background:#e9e9e6;border-radius:999px;height:7px;
+    margin:34px 0 18px;position:relative}
+  .prog{height:100%;width:0;background:var(--accent);border-radius:inherit;
     transition:width .35s ease;position:relative}
   .prog.running::after{content:"";position:absolute;inset:0;
-    background:repeating-linear-gradient(45deg,rgba(255,255,255,.18) 0 12px,
-      rgba(255,255,255,0) 12px 24px);background-size:34px 34px;
-      animation:stripes 1s linear infinite}
-  @keyframes stripes{to{background-position:34px 0}}
+    background:rgba(255,255,255,.22);border-radius:inherit;
+    animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.25}}
   .prog.indeterminate{width:35% !important;animation:slide 1.4s ease-in-out infinite}
   @keyframes slide{0%{margin-left:-35%}50%{margin-left:100%}100%{margin-left:-35%}}
-  .prog-pct{position:absolute;inset:0;display:flex;align-items:center;
-    justify-content:center;font-size:.72rem;font-weight:700;color:#fff;
-    text-shadow:0 1px 2px rgba(0,0,0,.6);letter-spacing:.3px;z-index:2}
+  .prog-pct{position:absolute;right:0;top:-25px;font-size:.76rem;font-weight:650;
+    color:var(--muted);font-variant-numeric:tabular-nums}
   .banner{display:flex;align-items:center;gap:10px;margin:6px 0 4px;
-    padding:10px 14px;background:var(--panel2);border:1px solid var(--border);
-    border-radius:10px;font-weight:600}
+    padding:12px 14px;background:var(--panel2);border:1px solid var(--border);
+    border-radius:8px;font-size:.88rem;font-weight:620}
   .banner .dot-anim{display:inline-flex;gap:3px}
-  .banner .dot-anim span{width:7px;height:7px;border-radius:50%;background:var(--accent);
+  .banner .dot-anim span{width:5px;height:5px;border-radius:50%;background:var(--accent);
     animation:bounce 1.2s infinite ease-in-out}
   .banner .dot-anim span:nth-child(2){animation-delay:.15s}
   .banner .dot-anim span:nth-child(3){animation-delay:.3s}
@@ -122,55 +160,96 @@ HTML_PAGE = r"""<!doctype html>
     40%{transform:scale(1);opacity:1}}
   .banner .timer{margin-left:auto;color:var(--muted);
     font-variant-numeric:tabular-nums;font-weight:500;font-size:.85rem}
-  .banner.ok{border-color:var(--accent2);color:var(--accent2)}
-  .banner.err{border-color:var(--err);color:var(--err)}
-  .banner.idle{opacity:.6}
-  .log{background:#0b1220;border:1px solid var(--border);border-radius:10px;
-    padding:12px;height:240px;overflow:auto;font-family:Consolas,Menlo,monospace;
-    font-size:.82rem;color:#cbd5e1;white-space:pre-wrap;margin-top:12px}
-  .log .err{color:var(--err)}
-  .log .ok{color:var(--accent2)}
-  .log .warn{color:var(--warn)}
-  .stats{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);
-    font-size:.85rem;margin-top:8px}
+  .banner.ok{border-color:#b8d9c8;background:var(--success-soft);color:var(--accent2)}
+  .banner.err{border-color:#e7b7b3;background:var(--error-soft);color:var(--err)}
+  .banner.idle{color:var(--muted)}
+  .log{background:#1e1e1c;border:1px solid #30302d;border-radius:8px;
+    padding:14px;height:220px;overflow:auto;font-family:"SFMono-Regular",Consolas,
+    "Liberation Mono",monospace;font-size:.78rem;line-height:1.55;color:#d8d8d2;
+    white-space:pre-wrap;margin-top:14px;scrollbar-color:#55554f #1e1e1c}
+  .log .err{color:#ff8f89}
+  .log .ok{color:#73c99b}
+  .log .warn{color:#e7bd61}
+  .stats{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);
+    font-size:.79rem;margin-top:8px}
+  .stats span{padding:5px 8px;border-radius:6px;background:var(--panel2);
+    border:1px solid #e8e8e5}
   .stats span b{color:var(--text)}
-  .download{margin-top:14px}
+  .download{margin-top:18px;padding-top:18px;border-top:1px solid #e8e8e5}
   .result-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .image-post{margin-top:16px;padding:16px;background:var(--panel2);
+  .result-actions a{display:inline-flex;text-decoration:none}
+  .image-post{margin-top:18px;padding:18px;background:var(--panel2);
     border:1px solid var(--border);border-radius:10px}
-  .image-post h3{margin:0 0 5px;font-size:1rem}
-  .image-post .hint{margin:0;color:var(--muted);font-size:.85rem}
+  .image-post h3{margin:0 0 6px;font-size:.95rem;letter-spacing:-.01em}
+  .image-post .hint{margin:0;color:var(--muted);font-size:.82rem;line-height:1.5}
   .image-post .log{height:120px;margin-top:10px}
-  .image-post .prog-wrap{margin-top:12px}
-  .badge{font-size:.7rem;padding:2px 8px;border-radius:99px;
-    background:var(--panel2);border:1px solid var(--border);color:var(--muted)}
+  .image-post .prog-wrap{margin:34px 0 18px}
+  .badge{font-size:.65rem;padding:4px 7px;border-radius:5px;
+    background:var(--accent-soft);border:1px solid #d8e2fb;color:var(--accent);
+    letter-spacing:.045em;font-weight:700;vertical-align:middle}
   .hidden{display:none}
-  footer{color:var(--muted);font-size:.78rem;margin-top:24px;text-align:center}
-  a{color:var(--accent)}
-  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);
-    display:flex;align-items:center;justify-content:center;z-index:1000}
+  footer{color:#898984;font-size:.74rem;margin-top:24px;text-align:center}
+  a{color:var(--accent);text-underline-offset:2px}
+  .modal-overlay{position:fixed;inset:0;background:rgba(24,24,23,.48);
+    display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
   .modal-overlay.hidden{display:none}
   .modal{background:var(--panel);border:1px solid var(--border);
-    border-radius:14px;padding:24px;width:min(460px,92vw);
-    box-shadow:0 8px 40px rgba(0,0,0,.4)}
-  .modal h3{margin:0 0 8px;font-size:1.1rem}
-  .modal-sub{color:var(--muted);font-size:.85rem;margin:0 0 16px}
-  .reset-stages{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+    border-radius:14px;padding:24px;width:min(480px,100%);
+    box-shadow:0 24px 80px rgba(24,24,23,.22)}
+  .modal h3{margin:0 0 8px;font-size:1.05rem;letter-spacing:-.015em}
+  .modal-sub{color:var(--muted);font-size:.83rem;line-height:1.5;margin:0 0 18px}
+  .reset-stages{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
   .reset-stages label{display:flex;align-items:center;gap:8px;cursor:pointer;
-    font-size:.9rem;padding:8px 12px;background:var(--panel2);
+    font-size:.85rem;padding:10px 12px;background:var(--panel2);
     border:1px solid var(--border);border-radius:8px}
   .reset-stages label:hover{border-color:var(--accent)}
-  .reset-stages code{margin-left:auto;color:var(--muted);font-size:.78rem}
-  .reset-stages .select-all{border-color:var(--accent)}
-  .modal-row{display:flex;gap:12px;justify-content:flex-end}
-  .modal-row button{padding:9px 18px}
+  .reset-stages code{margin-left:auto;color:var(--muted);font-size:.72rem}
+  .reset-stages .select-all{border-color:#aabcea;background:var(--accent-soft)}
+  .modal-row{display:flex;gap:10px;justify-content:flex-end}
+  .modal-row button{padding:8px 14px}
+
+  @media (max-width:760px){
+    .wrap{width:min(100% - 24px,980px);padding-top:28px}
+    .sub{padding-left:0;margin-top:10px}
+    .card{padding:18px}
+    .drop{padding:30px 16px}
+    .opts{grid-template-columns:1fr}
+    .stage-list{grid-template-columns:repeat(2,1fr)}
+    .stage:last-child{grid-column:1/-1}
+  }
+  @media (max-width:480px){
+    .topbar{align-items:flex-start}
+    .brand-mark{width:34px;height:34px}
+    h1{font-size:1.22rem}
+    .lang-switch button{padding-inline:9px}
+    .card{padding:14px;border-radius:12px}
+    .drop{padding:26px 12px}
+    .row>button{flex:1}
+    button#resetBtn{margin-left:0;flex-basis:100%}
+    .stage-list{grid-template-columns:1fr}
+    .stage:last-child{grid-column:auto}
+    .modal-row{flex-direction:column-reverse}
+    .modal-row button{width:100%}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;
+      animation-iteration-count:1!important;transition-duration:.01ms!important}
+  }
 
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="topbar">
-    <h1 data-i18n="title">PDF переводчик <span class="badge" id="langBadge">… → …</span></h1>
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M7.5 3.75h6l3 3v13.5h-9z"/>
+          <path d="M13.5 3.75v3h3M9.75 11h4.5M9.75 14h4.5M9.75 17h3"/>
+        </svg>
+      </div>
+      <h1 data-i18n="title">PDF переводчик <span class="badge" id="langBadge">… → …</span></h1>
+    </div>
     <div class="lang-switch" id="langSwitch">
       <button data-lang="ru" class="active">RU</button>
       <button data-lang="en">EN</button>
@@ -179,8 +258,13 @@ HTML_PAGE = r"""<!doctype html>
   <p class="sub" data-i18n="subtitle">Локальная LLM · сохранение структуры, изображений и оглавления</p>
 
   <div class="card">
-    <div class="drop" id="drop">
-      <div class="big">📄</div>
+    <div class="drop" id="drop" tabindex="0" role="button">
+      <div class="big" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M12 16V4M8 8l4-4 4 4"/>
+          <path d="M5 13v5.25A1.75 1.75 0 0 0 6.75 20h10.5A1.75 1.75 0 0 0 19 18.25V13"/>
+        </svg>
+      </div>
       <p><b data-i18n="drop_title">Перетащите PDF сюда</b> <span data-i18n="drop_or">или нажмите для выбора</span></p>
       <p class="sub" style="margin:0" id="langHint">исходный → целевой</p>
       <input type="file" id="file" accept="application/pdf">
@@ -192,7 +276,7 @@ HTML_PAGE = r"""<!doctype html>
       <label><input type="checkbox" id="fromTranslate"> <span data-i18n="translate_only">Только перевод</span></label>
       <label><span data-i18n="limit">Лимит сегментов:</span> <input type="number" id="limit" min="0" value="0" title="0 = все"></label>
       <label><span data-i18n="mode">Режим:</span>
-        <select id="mode" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;">
+        <select id="mode">
           <option value="pipeline" data-i18n="mode_pipeline">Pipeline (сегменты)</option>
           <option value="markdown" data-i18n="mode_markdown">Markdown (страница целиком)</option>
         </select>
@@ -228,7 +312,7 @@ HTML_PAGE = r"""<!doctype html>
     <div class="download hidden" id="downloadBox">
       <div class="result-actions">
         <a id="previewLink" href="#" target="_blank" rel="noopener"><button class="ghost" data-i18n="preview_base">Просмотреть базовый PDF</button></a>
-        <a id="downloadLink" href="#" download><button data-i18n="download">⬇ Скачать результат PDF</button></a>
+        <a id="downloadLink" href="#" download><button data-i18n="download">Скачать результат PDF</button></a>
       </div>
       <div class="image-post hidden" id="imagePostBox">
         <h3 data-i18n="image_title">Перевести текст внутри изображений</h3>
@@ -242,7 +326,7 @@ HTML_PAGE = r"""<!doctype html>
           <button id="imagePostBtn" disabled data-i18n="image_start">Обработать изображения</button>
           <button id="imageCancelBtn" class="ghost" disabled data-i18n="image_cancel">Отменить обработку</button>
           <a id="imagePreviewLink" class="hidden" href="#" target="_blank" rel="noopener"><button class="ghost" data-i18n="image_preview">Просмотреть улучшенный PDF</button></a>
-          <a id="imageDownloadLink" class="hidden" href="#" download><button data-i18n="image_download">⬇ Скачать улучшенный PDF</button></a>
+          <a id="imageDownloadLink" class="hidden" href="#" download><button data-i18n="image_download">Скачать улучшенный PDF</button></a>
         </div>
         <div class="log hidden" id="imageLog"></div>
       </div>
@@ -299,24 +383,24 @@ const I18N = {
     waiting: 'Ожидание запуска…',
     stage1: '1. Парсинг', stage2: '2. Сегментация', stage3: '3. Перевод',
     stage4: '4. Сборка', stage5: '5. Валидация',
-    download: '⬇ Скачать результат PDF',
+    download: 'Скачать результат PDF',
     preview_base: 'Просмотреть базовый PDF',
     image_title: 'Перевести текст внутри изображений',
     image_preview_hint: 'Сначала просмотрите базовый PDF, затем запустите дополнительную обработку.',
     image_ready_hint: 'Базовый PDF просмотрен. Можно запустить обработку изображений.',
     image_running_hint: 'Дополнительная обработка изображений выполняется…',
-    image_done_hint: '✓ Улучшенный PDF готов. Базовый PDF сохранён без изменений.',
+    image_done_hint: 'Улучшенный PDF готов. Базовый PDF сохранён без изменений.',
     image_error_hint: 'Не удалось обработать изображения. Базовый PDF по-прежнему доступен.',
     image_cancelled_hint: 'Обработка изображений отменена. Базовый PDF не изменён.',
     image_start: 'Обработать изображения',
     image_retry: 'Повторить обработку',
     image_cancel: 'Отменить обработку',
     image_preview: 'Просмотреть улучшенный PDF',
-    image_download: '⬇ Скачать улучшенный PDF',
+    image_download: 'Скачать улучшенный PDF',
     image_start_error: 'Не удалось запустить обработку изображений: ',
     image_cancel_req: 'Запрошена отмена обработки изображений…',
     image_phase: 'Фаза: ',
-    footer: 'Конвейер: PyMuPDF + OpenAI-совместимая LLM',
+    footer: 'Конвейер: PyMuPDF + OpenAI-совместимая LLM · ',
     need_pdf: 'Нужен PDF-файл',
     err_upload: 'Ошибка загрузки: ',
     err_start: 'Не удалось запустить конвейер',
@@ -324,8 +408,8 @@ const I18N = {
     cancel_req: 'Запрошена отмена…',
     starting: 'Запуск конвейера…',
     stage_running: 'Идёт «{stage}»…',
-    done: '✓ Готово — перевод завершён',
-    error: '✗ Ошибка — см. лог',
+    done: 'Готово — перевод завершён',
+    error: 'Ошибка — см. лог',
     cancelled: 'Отменено',
     waiting_short: 'Ожидание…',
     stat_stage: 'Этап: ', stat_segs: 'Сегментов: ', stat_ok: 'OK: ',
@@ -364,24 +448,24 @@ const I18N = {
     waiting: 'Waiting to start…',
     stage1: '1. Parse', stage2: '2. Segment', stage3: '3. Translate',
     stage4: '4. Build', stage5: '5. Validate',
-    download: '⬇ Download result PDF',
+    download: 'Download result PDF',
     preview_base: 'Preview base PDF',
     image_title: 'Translate text inside images',
     image_preview_hint: 'Preview the base PDF first, then start the optional image pass.',
     image_ready_hint: 'Base PDF previewed. Image processing can now be started.',
     image_running_hint: 'Optional image processing is running…',
-    image_done_hint: '✓ Enhanced PDF is ready. The base PDF was left unchanged.',
+    image_done_hint: 'Enhanced PDF is ready. The base PDF was left unchanged.',
     image_error_hint: 'Image processing failed. The base PDF is still available.',
     image_cancelled_hint: 'Image processing was cancelled. The base PDF was not changed.',
     image_start: 'Process images',
     image_retry: 'Retry image processing',
     image_cancel: 'Cancel image processing',
     image_preview: 'Preview enhanced PDF',
-    image_download: '⬇ Download enhanced PDF',
+    image_download: 'Download enhanced PDF',
     image_start_error: 'Could not start image processing: ',
     image_cancel_req: 'Image processing cancellation requested…',
     image_phase: 'Phase: ',
-    footer: 'Pipeline: PyMuPDF + OpenAI-compatible LLM',
+    footer: 'Pipeline: PyMuPDF + OpenAI-compatible LLM · ',
     need_pdf: 'PDF file required',
     err_upload: 'Upload error: ',
     err_start: 'Failed to start pipeline',
@@ -389,8 +473,8 @@ const I18N = {
     cancel_req: 'Cancel requested…',
     starting: 'Starting pipeline…',
     stage_running: 'Running «{stage}»…',
-    done: '✓ Done — translation finished',
-    error: '✗ Error — see log',
+    done: 'Done — translation finished',
+    error: 'Error — see log',
     cancelled: 'Cancelled',
     waiting_short: 'Waiting…',
     stat_stage: 'Stage: ', stat_segs: 'Segments: ', stat_ok: 'OK: ',
@@ -456,6 +540,12 @@ const drop = $('#drop'), fileInput = $('#file'), fileName = $('#fileName'),
       imageCancelBtn = $('#imageCancelBtn');
 
 drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' '){
+    e.preventDefault();
+    fileInput.click();
+  }
+});
 fileInput.addEventListener('change', e => { if (e.target.files[0]) pickFile(e.target.files[0]); });
 ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => {
   e.preventDefault(); drop.classList.add('over');
@@ -473,7 +563,7 @@ function pickFile(f){
     alert(t('need_pdf')); return;
   }
   selectedFile = f;
-  fileName.textContent = '📄 ' + f.name + '  (' + (f.size/1024/1024).toFixed(2) + ' MB)';
+  fileName.textContent = f.name + '  ·  ' + (f.size/1024/1024).toFixed(2) + ' MB';
   startBtn.disabled = false;
   resetBtn.disabled = false;
 }
@@ -989,9 +1079,10 @@ def _validate_image_pdf(base_pdf: Path, candidate_pdf: Path) -> tuple[bool, str,
             if not candidate_doc.is_pdf or candidate_doc.needs_pass:
                 return False, "image postprocess output is not a readable PDF", 0
             output_pages = candidate_doc.page_count
-            if output_pages < base_pages:
+            if output_pages != base_pages:
                 return False, (
-                    f"image postprocess lost pages: base={base_pages}, out={output_pages}"
+                    "image postprocess changed page count: "
+                    f"base={base_pages}, out={output_pages}"
                 ), output_pages
             for page_no in range(output_pages):
                 candidate_doc.load_page(page_no)
@@ -1112,6 +1203,25 @@ def _run_image_postprocess(job: dict) -> None:
         os.replace(partial_path, final_path)
         if partial_report.exists():
             try:
+                try:
+                    report_data = json.loads(
+                        partial_report.read_text(encoding="utf-8")
+                    )
+                    if isinstance(report_data, dict):
+                        report_data["output_pdf"] = str(final_path)
+                        report_data["report_path"] = str(final_report)
+                        partial_report.write_text(
+                            json.dumps(
+                                report_data, ensure_ascii=False, indent=2
+                            ),
+                            encoding="utf-8",
+                        )
+                except (json.JSONDecodeError, OSError, TypeError) as exc:
+                    with JOBS_LOCK:
+                        _append_image_log_locked(
+                            job["image_post"],
+                            f"[warning] vision report paths were not updated: {exc}",
+                        )
                 os.replace(partial_report, final_report)
             except OSError as exc:
                 with JOBS_LOCK:

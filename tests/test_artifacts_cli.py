@@ -435,6 +435,39 @@ class ImagePostprocessCliTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.logger.exception.assert_called()
 
+    def test_image_postprocess_rejects_partial_report_by_default(self) -> None:
+        source = self.root / "base.pdf"
+        output = self.root / "result.pdf"
+        self._make_pdf(source, 1)
+
+        def fake_postprocess(input_pdf, out_pdf, _cfg, _logger, progress):
+            document = fitz.open(input_pdf)
+            document.save(out_pdf)
+            document.close()
+            report_path = Path(str(out_pdf) + ".vision.json")
+            report_path.write_text(
+                json.dumps({"errors": [{"xref": 7}], "processed": 1}),
+                encoding="utf-8",
+            )
+            return {
+                "errors": [{"xref": 7}],
+                "processed": 1,
+                "report_path": str(report_path),
+            }
+
+        args = SimpleNamespace(
+            image_postprocess=str(source), out=str(output)
+        )
+        with patch(
+            "pipeline.vision.image_overlay.postprocess_images",
+            side_effect=fake_postprocess,
+        ):
+            ok = cli.run_image_postprocess(self.cfg, self.logger, args)
+
+        self.assertFalse(ok)
+        self.assertFalse(output.exists())
+        self.assertTrue(Path(str(output) + ".vision.json").exists())
+
     def test_main_handles_image_mode_before_source_hash_with_exit_0_or_2(self) -> None:
         for result, expected_exit in ((True, 0), (False, 2)):
             with self.subTest(result=result):

@@ -17,24 +17,67 @@ from openai import OpenAI
 from PIL import Image
 
 from pipeline.config.loader import ROOT
+from pipeline.translate.translator import _critical_tokens
 
 
-VISION_PROMPT_VERSION = "vision-regions-v2"
-VISION_PROMPT = """You are a precise OCR and technical-document translation engine.
-Inspect only text that is visibly present in the image. The source language is
-{src_lang}; translate into {tgt_lang}. Return exactly one JSON object and no
-Markdown or commentary:
-{{"regions":[{{"bbox":[x0,y0,x1,y1],"source_text":"...","translation":"...","confidence":0.0}}]}}
-
-Coordinates are normalized integers from 0 to 1000 relative to the complete
-image. The coordinate field must be named "bbox" (not "bbox_2d"). Include one
-tight rectangle per visible text region in reading order.
-Preserve every number, model name, identifier, filename, URL, unit and code
-exactly. Keep the translation concise enough for the same region. Never infer,
-complete or invent obscured text. Do not return unchanged code-only regions.
-If no confidently readable translatable text is visible, return
-{{"regions":[]}}.
-"""
+VISION_PROMPT_VERSION = "vision-regions-v3"
+VISION_PROMPT = """You are a precise OCR engine for technical screenshots.
+Follow the user's image-extraction instructions. Return only the JSON object
+constrained by the supplied schema. Never emit reasoning, Markdown or prose."""
+VISION_USER_PROMPT = """Inspect the complete image. Extract only confidently
+readable visible {src_lang} text and translate it concisely into {tgt_lang}.
+Each item is one complete semantic label or line, in reading order; do not
+merge separate controls. bbox=[x0,y0,x1,y1] uses integer coordinates normalized
+from 0 to 1000 for the full image, with x0<x1 and y0<y1. source_text is an exact
+transcription. translation must preserve every number, URL, filename, model
+name, identifier, unit and code. confidence is a number from 0 to 1. Exclude
+icons, decorative marks, already translated text, Latin/code-only regions and
+obscured text. Never infer missing text. If there is no translatable source
+text, return exactly {{"regions":[]}}."""
+VISION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "vision_regions",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "regions": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "bbox": {
+                                "type": "array",
+                                "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000,
+                                },
+                                "minItems": 4,
+                                "maxItems": 4,
+                            },
+                            "source_text": {"type": "string", "minLength": 1},
+                            "translation": {"type": "string", "minLength": 1},
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                        },
+                        "required": [
+                            "bbox", "source_text", "translation", "confidence",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["regions"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 _SCRIPT_PATTERNS = {
@@ -53,10 +96,6 @@ _LATIN_LANGS = {
     "sv", "no", "da", "fi", "tr", "ro", "hu", "id", "vi",
 }
 _LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
-_CRITICAL_TOKEN_RE = re.compile(
-    r"(?<!\w)(?:[A-Za-z]{0,12}[-_/.:]?)?\d+(?:[A-Za-z0-9._:/-]*)(?!\w)")
-
-
 def _base_lang(lang: str) -> str:
     return (lang or "").lower().replace("_", "-").split("-", 1)[0]
 
@@ -71,10 +110,6 @@ def _has_source_script(text: str, source_lang: str) -> bool:
     if lang in _LATIN_LANGS:
         return bool(_LATIN_RE.search(text))
     return any(ch.isalpha() for ch in text)
-
-
-def _critical_tokens(text: str) -> list[str]:
-    return [match.group(0) for match in _CRITICAL_TOKEN_RE.finditer(text or "")]
 
 
 def clean_region(region: Any, source_lang: str, target_lang: str) -> dict | None:
@@ -116,9 +151,8 @@ def clean_region(region: Any, source_lang: str, target_lang: str) -> dict | None
     if re.sub(r"\s+", "", source_text).casefold() == re.sub(
             r"\s+", "", translation).casefold():
         return None
-    for token in _critical_tokens(source_text):
-        if token not in translation:
-            return None
+    if _critical_tokens(source_text) - _critical_tokens(translation):
+        return None
     # A very large expansion is a strong hallucination signal, while still
     # allowing concise source scripts (CJK) to expand naturally.
     if len(translation) > max(500, len(source_text) * 8 + 80):
@@ -145,7 +179,13 @@ def _decode_json_object(raw: Any) -> dict | None:
         return raw
     if not isinstance(raw, str):
         return None
-    text = raw.strip()
+    text = raw.lstrip("\ufeff").strip()
+    text = re.sub(
+        r"<(?:think|analysis)>.*?</(?:think|analysis)>",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    ).strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text,
                           flags=re.IGNORECASE | re.DOTALL)
     if fenced:
@@ -153,6 +193,15 @@ def _decode_json_object(raw: Any) -> dict | None:
     try:
         value = json.loads(text)
     except (json.JSONDecodeError, TypeError):
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", text):
+            try:
+                candidate, _end = decoder.raw_decode(text[match.start():])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and isinstance(
+                    candidate.get("regions"), list):
+                return candidate
         return None
     return value if isinstance(value, dict) else None
 
@@ -242,9 +291,20 @@ class VisionTranslator:
             timeout=cfg.get("vision_request_timeout", 600),
         ) if self.enabled else None)
         self.max_tokens = int(cfg.get("vision_max_tokens", 2048))
+        self.retry_max_tokens = max(
+            self.max_tokens,
+            int(cfg.get("vision_retry_max_tokens", 8192)),
+        )
+        self.max_attempts = max(1, int(cfg.get("vision_max_attempts", 2)))
         self.temperature = float(cfg.get("vision_temperature", 0.0))
         self.top_p = float(cfg.get("vision_top_p", 0.9))
+        self.enable_thinking = bool(cfg.get(
+            "vision_enable_thinking",
+            cfg.get("enable_thinking", False),
+        ))
+        self.json_schema = bool(cfg.get("vision_json_schema", True))
         self.prompt_version = VISION_PROMPT_VERSION
+        self.last_call: dict[str, Any] = {}
 
     @staticmethod
     def _image_png(image: Image.Image) -> bytes:
@@ -277,43 +337,138 @@ class VisionTranslator:
             image_hash, src_lang, tgt_lang, str(self.model), self.prompt_version)
         if cache:
             cached = cache.get(key)
-            if cached is not None and _decode_json_object(cached) is not None:
-                return parse_regions(cached, src_lang, tgt_lang)
+            payload = _decode_json_object(cached) if cached is not None else None
+            if (
+                payload is not None
+                and payload.get("prompt_version") == self.prompt_version
+                and isinstance(payload.get("regions"), list)
+            ):
+                regions = parse_regions(payload, src_lang, tgt_lang)
+                self.last_call = {
+                    "cached": True,
+                    "attempts": 0,
+                    "retries": 0,
+                    "raw_regions": len(payload["regions"]),
+                    "accepted_regions": len(regions),
+                    "rejected_regions": len(payload["regions"]) - len(regions),
+                }
+                return regions
 
-        prompt = VISION_PROMPT.format(src_lang=src_lang, tgt_lang=tgt_lang)
         encoded = base64.b64encode(image_bytes).decode("ascii")
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": [{
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{encoded}",
-                        },
-                    }]},
-                ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
+        last_error = ""
+        last_raw = ""
+        attempts = 0
+        for attempt in range(1, self.max_attempts + 1):
+            attempts = attempt
+            instruction = VISION_USER_PROMPT.format(
+                src_lang=src_lang,
+                tgt_lang=tgt_lang,
             )
-        except Exception as exc:
-            raise RuntimeError(f"Vision LLM call failed: {exc}") from exc
+            if attempt > 1:
+                instruction += (
+                    "\nPrevious response was unusable. Return the schema JSON "
+                    "immediately; do not reason or omit required fields."
+                )
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": VISION_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": instruction},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{encoded}",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "max_tokens": min(
+                    self.retry_max_tokens,
+                    self.max_tokens * (2 ** (attempt - 1)),
+                ),
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+            }
+            if self.json_schema:
+                kwargs["response_format"] = VISION_RESPONSE_FORMAT
+            if not self.enable_thinking:
+                kwargs["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                last_error = f"call_failed:{exc}"
+                continue
+            if not getattr(response, "choices", None):
+                last_error = "no_choices"
+                continue
+            choice = response.choices[0]
+            finish_reason = str(getattr(choice, "finish_reason", "") or "")
+            raw = self._response_text(response)
+            last_raw = raw
+            if finish_reason == "length":
+                last_error = "finish_reason=length"
+                continue
+            if not raw:
+                last_error = f"empty_content finish_reason={finish_reason or 'unknown'}"
+                continue
+            payload = _decode_json_object(raw)
+            if payload is None or not isinstance(payload.get("regions"), list):
+                last_error = "invalid_regions_json"
+                continue
 
-        raw = self._response_text(response)
-        payload = _decode_json_object(raw)
-        if payload is None or not isinstance(payload.get("regions"), list):
-            raise RuntimeError("Vision LLM returned invalid regions JSON")
-        regions = parse_regions(payload, src_lang, tgt_lang)
-        serialized = json.dumps({
-            "prompt_version": self.prompt_version,
-            "regions": regions,
-        }, ensure_ascii=False, separators=(",", ":"))
-        if cache:
-            cache.put(key, image_hash, src_lang, tgt_lang, serialized,
-                      str(self.model), self.prompt_version)
-        return regions
+            raw_regions = payload["regions"][:256]
+            regions = parse_regions(payload, src_lang, tgt_lang)
+            source_candidates = sum(
+                1 for item in raw_regions
+                if isinstance(item, dict)
+                and _has_source_script(
+                    str(item.get("source_text") or ""), src_lang
+                )
+            )
+            if raw_regions and source_candidates and not regions:
+                last_error = (
+                    f"all_regions_rejected raw={len(raw_regions)} "
+                    f"source_candidates={source_candidates}"
+                )
+                continue
+
+            serialized = json.dumps({
+                "prompt_version": self.prompt_version,
+                "regions": regions,
+            }, ensure_ascii=False, separators=(",", ":"))
+            if cache:
+                cache.put(key, image_hash, src_lang, tgt_lang, serialized,
+                          str(self.model), self.prompt_version)
+            self.last_call = {
+                "cached": False,
+                "attempts": attempts,
+                "retries": attempts - 1,
+                "raw_regions": len(raw_regions),
+                "accepted_regions": len(regions),
+                "rejected_regions": len(raw_regions) - len(regions),
+            }
+            return regions
+
+        excerpt = re.sub(r"\s+", " ", last_raw).strip()[:800]
+        self.last_call = {
+            "cached": False,
+            "attempts": attempts,
+            "retries": max(0, attempts - 1),
+            "raw_regions": 0,
+            "accepted_regions": 0,
+            "rejected_regions": 0,
+        }
+        detail = f": {excerpt}" if excerpt else ""
+        raise RuntimeError(
+            f"Vision LLM response failed after {attempts} attempts "
+            f"({last_error}){detail}"
+        )
 
 
 def _pixmap_to_image(pix: fitz.Pixmap) -> Image.Image:

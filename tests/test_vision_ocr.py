@@ -1,10 +1,12 @@
 import hashlib
 import json
+from types import SimpleNamespace
 
 from PIL import Image
 
 from pipeline.vision.ocr import (VISION_PROMPT_VERSION, VisionCache,
-                                 VisionTranslator, parse_regions)
+                                 VisionTranslator, _decode_json_object,
+                                 clean_region, parse_regions)
 
 
 def test_parse_regions_cleans_bounds_confidence_and_rejects_hallucinations():
@@ -86,6 +88,76 @@ def test_qwen_bbox_2d_alias_is_normalized_without_relaxing_geometry():
         "translation": "Состояние устройства XG-200",
         "confidence": 0.98,
     }]
+
+
+def test_decoder_accepts_known_reasoning_and_prose_wrappers():
+    raw = (
+        "<think>internal reasoning</think>\n"
+        "Result:\n```json\n{\"regions\":[]}\n```\n"
+    )
+    assert _decode_json_object(raw) == {"regions": []}
+
+
+def test_region_tokens_allow_safe_localized_typography():
+    region = {
+        "bbox": [10, 10, 900, 200],
+        "source_text": "参数 Windows7 3.4GHz",
+        "translation": "Параметры Windows 7, 3,4 ГГц",
+        "confidence": 0.9,
+    }
+    assert clean_region(region, "zh", "ru") is not None
+
+
+def test_vision_request_forces_schema_disables_thinking_and_retries():
+    translator = VisionTranslator({
+        "vision_llm_base_url": "http://127.0.0.1:1/v1",
+        "vision_llm_api_key": "test",
+        "vision_llm_model": "mock-vision",
+        "vision_max_attempts": 2,
+        "vision_max_tokens": 128,
+        "vision_retry_max_tokens": 256,
+        "vision_enable_thinking": False,
+        "vision_json_schema": True,
+    })
+    calls = []
+    responses = [
+        SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop",
+            message=SimpleNamespace(content="not json"),
+        )]),
+        SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop",
+            message=SimpleNamespace(content=json.dumps({
+                "regions": [{
+                    "bbox": [10, 20, 900, 300],
+                    "source_text": "设备 42",
+                    "translation": "Устройство 42",
+                    "confidence": 0.95,
+                }]
+            }, ensure_ascii=False)),
+        )]),
+    ]
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return responses.pop(0)
+
+    translator.client.chat.completions = _Completions()
+    regions = translator.translate_image(
+        Image.new("RGB", (80, 40), "white"), "zh", "ru"
+    )
+
+    assert len(regions) == 1
+    assert len(calls) == 2
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+    assert calls[0]["max_tokens"] == 128
+    assert calls[1]["max_tokens"] == 256
+    assert calls[0]["messages"][1]["content"][0]["type"] == "text"
+    assert translator.last_call["retries"] == 1
 
 
 def test_cache_key_contains_prompt_version_and_cached_regions_avoid_llm(tmp_path):

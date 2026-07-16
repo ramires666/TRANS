@@ -187,7 +187,6 @@ def run_image_postprocess(cfg: dict, logger, args) -> bool:
     report_path = resolve_path(
         cfg.get("vision_report_path") or f"{output_path}.vision.json"
     ).resolve()
-    report_existed = report_path.exists()
 
     try:
         # Режим опциональный: тяжёлые vision/Pillow-зависимости импортируются
@@ -221,6 +220,14 @@ def run_image_postprocess(cfg: dict, logger, args) -> bool:
             "failed": len(report.get("errors") or []),
             "skipped": int(report.get("skipped") or 0),
         })
+        errors = list(report.get("errors") or [])
+        if errors and not bool(cfg.get("vision_allow_partial", False)):
+            raise RuntimeError(
+                "Vision postprocess завершён частично: "
+                f"ошибок изображений={len(errors)}, "
+                f"обработано={int(report.get('processed') or 0)}. "
+                f"Диагностика: {report.get('report_path')}"
+            )
 
         if not output_path.is_file():
             raise RuntimeError(
@@ -237,7 +244,13 @@ def run_image_postprocess(cfg: dict, logger, args) -> bool:
                 "Vision postprocess изменил число страниц: "
                 f"получено {actual_pages}, ожидалось {expected_pages}"
             )
-        logger.info("Image postprocess завершён: %s", output_path)
+        if errors:
+            logger.warning(
+                "Image postprocess завершён частично и разрешён конфигом: %s",
+                output_path,
+            )
+        else:
+            logger.info("Image postprocess завершён: %s", output_path)
         return True
     except Exception as exc:
         logger.exception("Image postprocess завершился ошибкой: %s", exc)
@@ -247,11 +260,8 @@ def run_image_postprocess(cfg: dict, logger, args) -> bool:
             output_path.unlink(missing_ok=True)
         except OSError:
             logger.warning("Не удалось удалить неполный результат: %s", output_path)
-        if not report_existed:
-            try:
-                report_path.unlink(missing_ok=True)
-            except OSError:
-                logger.warning("Не удалось удалить неполный отчёт: %s", report_path)
+        # Диагностический vision-report сохраняем: без него нельзя понять,
+        # какой xref и какой ответ модели сорвал строгий режим.
         return False
 
 

@@ -342,9 +342,17 @@ def postprocess_images(input_pdf, out_pdf, cfg: dict, logger,
         "errors": [],
         "min_font": None,
         "regions_processed": 0,
+        "regions_detected": 0,
+        "regions_rejected": 0,
+        "regions_skipped_overlay": 0,
         "images_total": 0,
         "unique_images": 0,
         "duplicate_xrefs": 0,
+        "images_failed": 0,
+        "cache_hits": 0,
+        "attempts": 0,
+        "retries": 0,
+        "outcome": "running",
         "skip_reasons": {},
     }
 
@@ -392,6 +400,16 @@ def postprocess_images(input_pdf, out_pdf, cfg: dict, logger,
                     continue
                 regions = translator.translate_image(
                     image, source_lang, target_lang, cache)
+                call_stats = dict(getattr(translator, "last_call", {}) or {})
+                report["cache_hits"] += int(bool(call_stats.get("cached")))
+                report["attempts"] += int(call_stats.get("attempts") or 0)
+                report["retries"] += int(call_stats.get("retries") or 0)
+                report["regions_detected"] += int(
+                    call_stats.get("raw_regions") or 0
+                )
+                report["regions_rejected"] += int(
+                    call_stats.get("rejected_regions") or 0
+                )
                 overlaid, overlay_report = overlay_regions(
                     image,
                     regions,
@@ -403,6 +421,9 @@ def postprocess_images(input_pdf, out_pdf, cfg: dict, logger,
                     padding=padding,
                     text_align=text_align,
                     bbox_padding_ratio=bbox_padding_ratio,
+                )
+                report["regions_skipped_overlay"] += int(
+                    overlay_report.get("skipped") or 0
                 )
                 if not overlay_report["modified"]:
                     reason = "no_valid_regions" if regions else "no_regions"
@@ -421,13 +442,16 @@ def postprocess_images(input_pdf, out_pdf, cfg: dict, logger,
                 state = "processed"
             except Exception as exc:
                 report["errors"].append({
-                    "page": page_number,
+                    "page": page_number + 1,
                     "xref": xref,
                     "error": str(exc),
                 })
                 logger.warning("Vision image xref=%d page=%d: %s",
                                xref, page_number + 1, exc)
-                _record_skip(report, "error")
+                report["images_failed"] += 1
+                report["skip_reasons"]["error"] = (
+                    report["skip_reasons"].get("error", 0) + 1
+                )
                 state = "error"
             finally:
                 _notify(progress, logger, {
@@ -435,10 +459,17 @@ def postprocess_images(input_pdf, out_pdf, cfg: dict, logger,
                     "current": current,
                     "total": total,
                     "xref": xref,
-                    "page": page_number,
+                    "page": page_number + 1,
                     "state": state,
                 })
 
+        report["outcome"] = (
+            "partial"
+            if report["errors"] and report["processed"]
+            else "failed"
+            if report["errors"]
+            else "success"
+        )
         expected_page_count = document.page_count
         temporary_output = _temporary_pdf_path(output_path)
         document.save(str(temporary_output), garbage=4, deflate=True)
@@ -460,8 +491,12 @@ def postprocess_images(input_pdf, out_pdf, cfg: dict, logger,
         temporary_output = None
         _atomic_json(report_path, report)
         logger.info(
-            "Vision postprocess: processed=%d skipped=%d errors=%d min_font=%s",
-            report["processed"], report["skipped"], len(report["errors"]),
+            "Vision postprocess: outcome=%s processed=%d skipped=%d failed=%d "
+            "errors=%d cache_hits=%d retries=%d regions=%d/%d min_font=%s",
+            report["outcome"], report["processed"], report["skipped"],
+            report["images_failed"], len(report["errors"]),
+            report["cache_hits"], report["retries"],
+            report["regions_processed"], report["regions_detected"],
             report["min_font"],
         )
         return report

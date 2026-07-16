@@ -252,6 +252,22 @@ class WebImagePostprocessTests(unittest.TestCase):
         self.assertEqual(_sha256(base), base_digest)
         self.assertEqual(job["state"], "done")
 
+    def test_image_pdf_validation_rejects_added_pages(self):
+        base = self.uploads / "base-one-page.pdf"
+        candidate = self.uploads / "candidate-two-pages.pdf"
+        _make_pdf(base, label="base")
+        document = fitz.open()
+        document.new_page()
+        document.new_page()
+        document.save(candidate)
+        document.close()
+
+        valid, reason, pages = web._validate_image_pdf(base, candidate)
+
+        self.assertFalse(valid)
+        self.assertIn("changed page count", reason)
+        self.assertEqual(2, pages)
+
     def test_cancel_is_nested_and_does_not_cancel_main_job(self):
         job = self._job()
         proc = Mock()
