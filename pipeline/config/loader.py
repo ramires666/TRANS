@@ -12,6 +12,19 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def configure_target_language(
+        cfg: dict[str, Any], target_lang: str | None = None) -> dict[str, Any]:
+    """Apply target-specific resources without mutating the YAML on disk."""
+    target = str(target_lang or cfg.get("target_lang") or "ru").lower()
+    cfg["target_lang"] = target
+    glossary_paths = cfg.get("glossary_paths")
+    if isinstance(glossary_paths, dict):
+        selected = glossary_paths.get(target)
+        if selected:
+            cfg["glossary_path"] = selected
+    return cfg
+
+
 def load_config(path: str | os.PathLike | None = None) -> dict[str, Any]:
     if path:
         cfg_path = Path(path)
@@ -24,7 +37,7 @@ def load_config(path: str | os.PathLike | None = None) -> dict[str, Any]:
     cfg.setdefault("root", str(ROOT))
     cfg.setdefault("source_lang", "zh")
     cfg.setdefault("target_lang", "ru")
-    return cfg
+    return configure_target_language(cfg)
 
 
 def ensure_dirs(cfg: dict[str, Any]) -> None:

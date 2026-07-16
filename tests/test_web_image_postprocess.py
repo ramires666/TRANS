@@ -76,7 +76,8 @@ class WebImagePostprocessTests(unittest.TestCase):
         if not base.exists():
             _make_pdf(base)
         job = {
-            "job_id": job_id, "src": str(base), "out_path": str(base),
+            "job_id": job_id, "target_lang": "ru",
+            "src": str(base), "out_path": str(base),
             "state": state, "stage": "validate", "progress": 1, "total": 1,
             "ok": 1, "cached": 0, "fail": 0, "pages": 1, "images": 1,
             "logs": [], "result_path": str(base),
@@ -130,6 +131,9 @@ class WebImagePostprocessTests(unittest.TestCase):
         self.assertEqual(Path(first["out_path"]).parent, self.uploads.resolve())
         self.assertTrue(Path(first["out_path"]).name.startswith(first_id + "_"))
         self.assertEqual(first["download_name"], "manual_RU.pdf")
+        english = web._new_job(str(source), "e" * 12, target_lang="en")
+        self.assertEqual(english["target_lang"], "en")
+        self.assertEqual(english["download_name"], "manual_EN.pdf")
 
     def test_main_start_rejects_paths_not_owned_by_upload_job(self):
         job_id = "c" * 12
@@ -147,6 +151,7 @@ class WebImagePostprocessTests(unittest.TestCase):
                 "/api/start", json={"job": job_id, "src": str(outside)})
 
         self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()["target_lang"], "ru")
         self.assertEqual(wrong_job.status_code, 403)
         self.assertEqual(outside_result.status_code, 404)
         runner.assert_called_once()
@@ -229,7 +234,8 @@ class WebImagePostprocessTests(unittest.TestCase):
         self.assertFalse(partial.exists())
         self.assertFalse(Path(str(partial) + ".vision.json").exists())
         self.assertEqual(calls[0][0], [
-            web.sys.executable, "-m", "app.cli", "--image-postprocess",
+            web.sys.executable, "-m", "app.cli", "--target-lang", "ru",
+            "--image-postprocess",
             str(base), "--out", str(partial),
         ])
 
@@ -369,6 +375,31 @@ class WebImagePostprocessTests(unittest.TestCase):
         self.assertIn("imagePostBtn.disabled = active || state === 'done' || !basePreviewed",
                       web.HTML_PAGE)
         self.assertIn("/image-postprocess/cancel", web.HTML_PAGE)
+        self.assertIn('id="themeToggle"', web.HTML_PAGE)
+        self.assertIn("target_lang: targetLang()", web.HTML_PAGE)
+        self.assertIn("even text embedded in images", web.HTML_PAGE)
+
+    def test_start_accepts_english_target_and_rejects_unknown_language(self):
+        job_id = "f" * 12
+        owned = self.uploads / f"{job_id}_manual.pdf"
+        _make_pdf(owned)
+        with patch.object(web, "_run_pipeline") as runner:
+            accepted = self.client.post("/api/start", json={
+                "job": job_id, "src": str(owned), "target_lang": "en",
+            })
+            rejected = self.client.post("/api/start", json={
+                "job": "1" * 12,
+                "src": str(owned),
+                "target_lang": "zh",
+            })
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()["target_lang"], "en")
+        with web.JOBS_LOCK:
+            self.assertEqual(web.JOBS[job_id]["target_lang"], "en")
+            self.assertTrue(web.JOBS[job_id]["download_name"].endswith("_EN.pdf"))
+        self.assertEqual(rejected.status_code, 400)
+        runner.assert_called_once()
 
 
 if __name__ == "__main__":

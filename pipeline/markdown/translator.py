@@ -115,6 +115,13 @@ class MarkdownTranslator:
             source_language=cfg.get("source_lang", "zh"),
             target_language=cfg.get("target_lang", "ru"),
         )
+        if not custom_prompt and str(cfg.get("target_lang", "")).lower().startswith("en"):
+            self.system_prompt += (
+                " Английский должен звучать как профессионально отредактированная "
+                "техническая документация: используй естественный порядок слов и "
+                "стандартную отраслевую терминологию; избегай дословных кальк с "
+                "китайского, русизмов и неестественных заголовков."
+            )
 
     def translate_page(self, text: str, page_num: int, total: int) -> str:
         """Один LLM-вызов на страницу. Возвращает Markdown."""

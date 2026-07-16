@@ -20,6 +20,8 @@ from pipeline.translate.translator import (
     _logical_bullets,
     normalize_soft_wraps,
 )
+from pipeline.anchors import compiled_anchors
+from pipeline.config.loader import configure_target_language
 
 
 def _response(content: str, finish_reason: str = "stop") -> SimpleNamespace:
@@ -215,6 +217,76 @@ class TranslatorTestCase(unittest.TestCase):
             finally:
                 translator.close()
 
+    def test_document_neighbours_are_sent_as_translation_context(self):
+        with tempfile.TemporaryDirectory() as root:
+            translator, _fake = self._translator(root, [])
+            try:
+                segments = [
+                    {
+                        "id": 1, "page": 0, "type": "heading",
+                        "section_id": "2", "text": "触发设置",
+                    },
+                    {
+                        "id": 2, "page": 0, "type": "paragraph",
+                        "section_id": "2", "text": "模式",
+                    },
+                    {
+                        "id": 3, "page": 0, "type": "paragraph",
+                        "section_id": "2", "text": "选择外触发",
+                    },
+                ]
+                translator._active_document_contexts = (
+                    translator._document_contexts(segments)
+                )
+                records = [translator._prepare_record(seg) for seg in segments]
+                payload = json.loads(
+                    translator._build_batch_messages(records)[1]["content"]
+                )
+                middle = payload["items"][1]["context"]
+                self.assertEqual(middle["section_title"], "触发设置")
+                self.assertEqual(middle["previous_text"], "触发设置")
+                self.assertEqual(middle["next_text"], "选择外触发")
+            finally:
+                translator.close()
+
+    def test_neighbour_context_changes_cache_signature(self):
+        with tempfile.TemporaryDirectory() as root:
+            translator, _fake = self._translator(root, [])
+            try:
+                first_set = [
+                    {"id": 1, "section_id": "1", "text": "网络设置"},
+                    {"id": 2, "section_id": "1", "text": "模式"},
+                ]
+                second_set = [
+                    {"id": 1, "section_id": "1", "text": "曝光设置"},
+                    {"id": 2, "section_id": "1", "text": "模式"},
+                ]
+                translator._active_document_contexts = (
+                    translator._document_contexts(first_set)
+                )
+                first = translator._prepare_record(first_set[1])
+                translator._active_document_contexts = (
+                    translator._document_contexts(second_set)
+                )
+                second = translator._prepare_record(second_set[1])
+                self.assertNotEqual(first["prompt_hash"], second["prompt_hash"])
+                self.assertNotEqual(first["cache_key"], second["cache_key"])
+            finally:
+                translator.close()
+
+    def test_english_target_uses_english_anchors_and_glossary_path(self):
+        cfg = {
+            "source_lang": "zh",
+            "target_lang": "ru",
+            "glossary_path": "ru.csv",
+            "glossary_paths": {"ru": "ru.csv", "en": "en.csv"},
+        }
+        configure_target_language(cfg, "en")
+        anchors = compiled_anchors(cfg)
+        self.assertEqual(cfg["glossary_path"], "en.csv")
+        self.assertEqual(anchors["fig"]["dst_label"], "Fig.")
+        self.assertEqual(anchors["tab"]["dst_label"], "Table")
+
     def test_batch_json_retries_only_invalid_item(self):
         batch = {
             "items": [
@@ -396,6 +468,21 @@ class MarkdownTranslatorTestCase(unittest.TestCase):
         sent_user = fake.completions.calls[0]["messages"][1]["content"]
         self.assertNotIn("Страница 3 из 9", sent_user)
         self.assertIn("<document_page>", sent_user)
+
+    def test_english_default_prompt_requires_natural_technical_english(self):
+        fake = FakeClient([])
+        cfg = {
+            "llm_base_url": "http://test.invalid/v1",
+            "llm_model": "fake-model",
+            "source_lang": "zh",
+            "target_lang": "en",
+            "markdown_system_prompt": "",
+            "enable_thinking": False,
+        }
+        with patch("pipeline.markdown.translator.OpenAI", return_value=fake):
+            translator = MarkdownTranslator(cfg, Mock())
+        self.assertIn("стандартную отраслевую терминологию", translator.system_prompt)
+        self.assertIn("дословных кальк", translator.system_prompt)
 
 
 if __name__ == "__main__":

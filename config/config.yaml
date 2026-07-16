@@ -41,6 +41,8 @@ translation_max_attempts: 3
 translation_layout_budget: true
 translation_layout_fill: 0.90
 translation_avg_char_width: 0.56
+# Контекст соседних блоков, передаваемый модели для выбора значения терминов.
+translation_context_chars: 220
 
 # Vision LLM (OpenAI-совместимый эндпоинт) — только для отдельного
 # постпроцесса изображений. Модель должна быть указана явно: обычная text LLM
@@ -80,6 +82,9 @@ log_dir: "log"
 
 # Глоссарий
 glossary_path: "config/glossary.csv"
+glossary_paths:
+  ru: "config/glossary.csv"
+  en: "config/glossary_en.csv"
 
 # Кэш переводов (будет лежать в intermediate/<hash>/translations.db)
 cache_db: "intermediate/translations.db"

@@ -16,17 +16,27 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Пресеты для типичных языковых пар. Ключ — source_lang (без target_lang):
-# перевод идёт в условный «Рис. N-M»/«Табл. N-N» для русского, либо
-# «Fig. N-M»/«Table N-N» для английского и т.д.
-_PRESETS: dict[str, dict[str, dict]] = {
+# Исходные шаблоны зависят от source_lang, а оформление результата —
+# от target_lang. Это не позволяет английскому запуску наследовать русские
+# подписи «Рис.»/«Табл.».
+_SOURCE_PRESETS: dict[str, dict[str, str]] = {
     "zh": {
-        "fig": {"src": r"图\s*(\d+-\d+)", "dst_label": "Рис.", "dst": r"Рис\.?\s*(\d+-\d+)"},
-        "tab": {"src": r"表\s*(\d+-\d+)", "dst_label": "Табл.", "dst": r"Табл\.?\s*(\d+-\d+)"},
+        "fig": r"图\s*(\d+-\d+)",
+        "tab": r"表\s*(\d+-\d+)",
     },
     "en": {
-        "fig": {"src": r"Fig\.?\s*(\d+-\d+)", "dst_label": "Рис.", "dst": r"Рис\.?\s*(\d+-\d+)"},
-        "tab": {"src": r"Table\s*(\d+-\d+)", "dst_label": "Табл.", "dst": r"Табл\.?\s*(\d+-\d+)"},
+        "fig": r"Fig\.?\s*(\d+-\d+)",
+        "tab": r"Table\s*(\d+-\d+)",
+    },
+}
+_TARGET_PRESETS: dict[str, dict[str, dict[str, str]]] = {
+    "ru": {
+        "fig": {"label": "Рис.", "regex": r"Рис\.?\s*(\d+-\d+)"},
+        "tab": {"label": "Табл.", "regex": r"Табл\.?\s*(\d+-\d+)"},
+    },
+    "en": {
+        "fig": {"label": "Fig.", "regex": r"Fig\.?\s*(\d+-\d+)"},
+        "tab": {"label": "Table", "regex": r"Table\s*(\d+-\d+)"},
     },
 }
 
@@ -53,16 +63,20 @@ LIST_NUM = r"^\s*(\d+)\.\s+(.*)$"
 
 def _anchor(cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
     source_lang = cfg.get("source_lang", "zh")
-    presets = _PRESETS.get(source_lang, {})
+    target_lang = cfg.get("target_lang", "ru")
+    source_presets = _SOURCE_PRESETS.get(source_lang, {})
+    target_presets = _TARGET_PRESETS.get(
+        target_lang, _TARGET_PRESETS["en"]
+    )
     custom = cfg.get("anchors") or {}
     out: dict[str, dict[str, str]] = {}
     for kind in ("fig", "tab"):
         c = custom.get(kind, {})
-        p = presets.get(kind, {})
+        target = target_presets.get(kind, {})
         out[kind] = {
-            "src_regex": c.get("src_regex") or p.get("src", ""),
-            "dst_label": c.get("dst_label") or p.get("dst_label", ""),
-            "dst_regex": c.get("dst_regex") or p.get("dst", ""),
+            "src_regex": c.get("src_regex") or source_presets.get(kind, ""),
+            "dst_label": c.get("dst_label") or target.get("label", ""),
+            "dst_regex": c.get("dst_regex") or target.get("regex", ""),
         }
     return out
 

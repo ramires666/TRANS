@@ -21,7 +21,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 import uvicorn
 
-from pipeline.config.loader import ROOT, load_config
+from pipeline.config.loader import ROOT, configure_target_language, load_config
 from pipeline.io.artifacts import source_hash, workdir
 from pipeline.translate.translator import translate_filename_stem
 
@@ -48,7 +48,22 @@ HTML_PAGE = r"""<!doctype html>
     --accent:#2457d6; --accent-hover:#1d46ad; --accent-soft:#eef3ff;
     --accent2:#18794e; --success-soft:#edf8f2; --warn:#9a6700;
     --warn-soft:#fff8e6; --err:#c93c37; --error-soft:#fff1f0;
+    --divider:#e8e8e5; --switch-bg:#ececea; --track:#e9e9e6;
+    --brand-bg:#181817; --brand-fg:#ffffff; --log-bg:#1e1e1c;
+    --log-border:#30302d; --log-text:#d8d8d2; --overlay:rgba(24,24,23,.48);
     --shadow:0 1px 2px rgba(24,24,23,.04),0 12px 32px rgba(24,24,23,.06);
+  }
+  html[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#121310; --panel:#1b1c19; --panel2:#22231f; --border:#34352f;
+    --border-strong:#4b4c45; --text:#f1f1ec; --muted:#aaa9a1;
+    --accent:#7ea2ff; --accent-hover:#94b2ff; --accent-soft:#202c49;
+    --accent2:#70c99a; --success-soft:#193126; --warn:#e2b85c;
+    --warn-soft:#362d18; --err:#ff8e87; --error-soft:#3a2220;
+    --divider:#30312c; --switch-bg:#242520; --track:#34352f;
+    --brand-bg:#f1f1ec; --brand-fg:#181817; --log-bg:#10110f;
+    --log-border:#2b2c27; --log-text:#deded7; --overlay:rgba(0,0,0,.66);
+    --shadow:0 1px 2px rgba(0,0,0,.2),0 16px 40px rgba(0,0,0,.22);
   }
   *{box-sizing:border-box}
   html{background:var(--bg)}
@@ -58,22 +73,34 @@ HTML_PAGE = r"""<!doctype html>
   .wrap{width:min(980px,calc(100% - 32px));padding:52px 0 36px}
   .topbar{display:flex;align-items:center;justify-content:space-between;
     gap:20px;margin-bottom:8px}
+  .header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
   .brand{display:flex;align-items:center;gap:12px;min-width:0}
   .brand-mark{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;
-    border-radius:10px;background:var(--text);color:#fff}
+    border-radius:10px;background:var(--brand-bg);color:var(--brand-fg)}
   .brand-mark svg{width:20px;height:20px}
   h1{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
     font-size:1.45rem;line-height:1.2;margin:0;letter-spacing:-.025em;font-weight:680}
-  .lang-switch{display:inline-flex;background:#ececea;border:1px solid var(--border);
+  .lang-switch{display:inline-flex;background:var(--switch-bg);border:1px solid var(--border);
     border-radius:8px;padding:3px;gap:2px;flex-shrink:0}
   .lang-switch button{min-height:30px;padding:4px 11px;border-radius:6px;
     background:transparent;color:var(--muted);font-weight:650;font-size:.75rem;
     line-height:1;border:0;box-shadow:none}
-  .lang-switch button:hover:not(:disabled){background:rgba(255,255,255,.62);color:var(--text)}
+  .lang-switch button:hover:not(:disabled){background:var(--panel);color:var(--text)}
   .lang-switch button.active{background:var(--panel);color:var(--text);
     box-shadow:0 1px 2px rgba(24,24,23,.09)}
-  .sub{color:var(--muted);margin:0 0 28px;padding-left:50px;
+  .theme-toggle{width:38px;height:38px;min-height:38px;display:grid;place-items:center;
+    padding:0;border-color:var(--border);background:var(--panel);color:var(--text)}
+  .theme-toggle:hover:not(:disabled){background:var(--panel2);border-color:var(--border-strong)}
+  .theme-toggle svg{width:17px;height:17px}
+  .theme-toggle .moon{display:none}
+  html[data-theme="dark"] .theme-toggle .sun{display:none}
+  html[data-theme="dark"] .theme-toggle .moon{display:block}
+  .hero-copy{margin:24px 0 28px}
+  .hero-copy h2{margin:0;font-size:clamp(1.65rem,3vw,2.35rem);line-height:1.12;
+    letter-spacing:-.04em;font-weight:690}
+  .hero-copy .sub{color:var(--muted);margin:9px 0 0;padding:0;
     font-size:.91rem;line-height:1.5}
+  .sub{color:var(--muted);font-size:.91rem;line-height:1.5}
   .card{background:var(--panel);border:1px solid var(--border);
     border-radius:14px;padding:24px;margin-bottom:16px;box-shadow:var(--shadow)}
   .drop{border:1px dashed var(--border-strong);border-radius:10px;padding:38px 24px;
@@ -106,12 +133,12 @@ HTML_PAGE = r"""<!doctype html>
   button:focus-visible{outline:0;box-shadow:0 0 0 3px rgba(36,87,214,.18)}
   button:disabled{opacity:.42;cursor:not-allowed}
   button.ghost{background:var(--panel);color:var(--text);border-color:var(--border-strong)}
-  button.ghost:hover:not(:disabled){background:var(--panel2);border-color:#aaa9a4}
-  button#resetBtn{margin-left:auto;color:var(--err);border-color:#e9c3c0}
-  button#resetBtn:hover:not(:disabled){background:var(--error-soft);border-color:#dfaaa6}
+  button.ghost:hover:not(:disabled){background:var(--panel2);border-color:var(--border-strong)}
+  button#resetBtn{margin-left:auto;color:var(--err);border-color:var(--border-strong)}
+  button#resetBtn:hover:not(:disabled){background:var(--error-soft);border-color:var(--err)}
   .opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;
     color:var(--muted);font-size:.86rem;margin-top:18px;padding:18px 0 0;
-    border-top:1px solid #ebebe8}
+    border-top:1px solid var(--divider)}
   .opts label{display:flex;min-height:34px;align-items:center;gap:8px;cursor:pointer}
   input[type=checkbox]{width:16px;height:16px;margin:0;accent-color:var(--accent)}
   input[type=number],select{height:34px;background:var(--panel);border:1px solid
@@ -127,16 +154,16 @@ HTML_PAGE = r"""<!doctype html>
     text-align:left;color:var(--muted);transition:.18s}
   .stage .t{font-weight:650;color:var(--text);display:block;margin-bottom:2px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .stage.active{border-color:#9cb4ed;background:var(--accent-soft);color:var(--accent);
+  .stage.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);
     box-shadow:inset 3px 0 0 var(--accent)}
-  .stage.done{border-color:#b8d9c8;background:var(--success-soft);color:var(--accent2)}
-  .stage.err{border-color:#e7b7b3;background:var(--error-soft);color:var(--err)}
+  .stage.done{border-color:var(--accent2);background:var(--success-soft);color:var(--accent2)}
+  .stage.err{border-color:var(--err);background:var(--error-soft);color:var(--err)}
   .stage .spin{display:inline-block;width:12px;height:12px;border:2px solid
     currentColor;border-top-color:transparent;border-radius:50%;
     animation:spin .8s linear infinite;vertical-align:-2px;margin-left:5px}
   .stage.done .spin{display:none}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .prog-wrap{background:#e9e9e6;border-radius:999px;height:7px;
+  .prog-wrap{background:var(--track);border-radius:999px;height:7px;
     margin:34px 0 18px;position:relative}
   .prog{height:100%;width:0;background:var(--accent);border-radius:inherit;
     transition:width .35s ease;position:relative}
@@ -160,22 +187,22 @@ HTML_PAGE = r"""<!doctype html>
     40%{transform:scale(1);opacity:1}}
   .banner .timer{margin-left:auto;color:var(--muted);
     font-variant-numeric:tabular-nums;font-weight:500;font-size:.85rem}
-  .banner.ok{border-color:#b8d9c8;background:var(--success-soft);color:var(--accent2)}
-  .banner.err{border-color:#e7b7b3;background:var(--error-soft);color:var(--err)}
+  .banner.ok{border-color:var(--accent2);background:var(--success-soft);color:var(--accent2)}
+  .banner.err{border-color:var(--err);background:var(--error-soft);color:var(--err)}
   .banner.idle{color:var(--muted)}
-  .log{background:#1e1e1c;border:1px solid #30302d;border-radius:8px;
+  .log{background:var(--log-bg);border:1px solid var(--log-border);border-radius:8px;
     padding:14px;height:220px;overflow:auto;font-family:"SFMono-Regular",Consolas,
-    "Liberation Mono",monospace;font-size:.78rem;line-height:1.55;color:#d8d8d2;
-    white-space:pre-wrap;margin-top:14px;scrollbar-color:#55554f #1e1e1c}
+    "Liberation Mono",monospace;font-size:.78rem;line-height:1.55;color:var(--log-text);
+    white-space:pre-wrap;margin-top:14px;scrollbar-color:var(--muted) var(--log-bg)}
   .log .err{color:#ff8f89}
   .log .ok{color:#73c99b}
   .log .warn{color:#e7bd61}
   .stats{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);
     font-size:.79rem;margin-top:8px}
   .stats span{padding:5px 8px;border-radius:6px;background:var(--panel2);
-    border:1px solid #e8e8e5}
+    border:1px solid var(--divider)}
   .stats span b{color:var(--text)}
-  .download{margin-top:18px;padding-top:18px;border-top:1px solid #e8e8e5}
+  .download{margin-top:18px;padding-top:18px;border-top:1px solid var(--divider)}
   .result-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   .result-actions a{display:inline-flex;text-decoration:none}
   .image-post{margin-top:18px;padding:18px;background:var(--panel2);
@@ -185,12 +212,12 @@ HTML_PAGE = r"""<!doctype html>
   .image-post .log{height:120px;margin-top:10px}
   .image-post .prog-wrap{margin:34px 0 18px}
   .badge{font-size:.65rem;padding:4px 7px;border-radius:5px;
-    background:var(--accent-soft);border:1px solid #d8e2fb;color:var(--accent);
+    background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent);
     letter-spacing:.045em;font-weight:700;vertical-align:middle}
   .hidden{display:none}
-  footer{color:#898984;font-size:.74rem;margin-top:24px;text-align:center}
+  footer{color:var(--muted);font-size:.74rem;margin-top:24px;text-align:center}
   a{color:var(--accent);text-underline-offset:2px}
-  .modal-overlay{position:fixed;inset:0;background:rgba(24,24,23,.48);
+  .modal-overlay{position:fixed;inset:0;background:var(--overlay);
     display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
   .modal-overlay.hidden{display:none}
   .modal{background:var(--panel);border:1px solid var(--border);
@@ -204,13 +231,13 @@ HTML_PAGE = r"""<!doctype html>
     border:1px solid var(--border);border-radius:8px}
   .reset-stages label:hover{border-color:var(--accent)}
   .reset-stages code{margin-left:auto;color:var(--muted);font-size:.72rem}
-  .reset-stages .select-all{border-color:#aabcea;background:var(--accent-soft)}
+  .reset-stages .select-all{border-color:var(--accent);background:var(--accent-soft)}
   .modal-row{display:flex;gap:10px;justify-content:flex-end}
   .modal-row button{padding:8px 14px}
 
   @media (max-width:760px){
     .wrap{width:min(100% - 24px,980px);padding-top:28px}
-    .sub{padding-left:0;margin-top:10px}
+    .hero-copy{margin-top:20px}
     .card{padding:18px}
     .drop{padding:30px 16px}
     .opts{grid-template-columns:1fr}
@@ -219,6 +246,7 @@ HTML_PAGE = r"""<!doctype html>
   }
   @media (max-width:480px){
     .topbar{align-items:flex-start}
+    .header-actions{gap:6px}
     .brand-mark{width:34px;height:34px}
     h1{font-size:1.22rem}
     .lang-switch button{padding-inline:9px}
@@ -250,12 +278,27 @@ HTML_PAGE = r"""<!doctype html>
       </div>
       <h1 data-i18n="title">PDF переводчик <span class="badge" id="langBadge">… → …</span></h1>
     </div>
-    <div class="lang-switch" id="langSwitch">
-      <button data-lang="ru" class="active">RU</button>
-      <button data-lang="en">EN</button>
+    <div class="header-actions">
+      <button class="theme-toggle" id="themeToggle" type="button"
+              aria-label="Переключить тему" title="Переключить тему">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.5"/>
+          <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4"/>
+        </svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <path d="M19.2 15.2A8 8 0 0 1 8.8 4.8a8 8 0 1 0 10.4 10.4z"/>
+        </svg>
+      </button>
+      <div class="lang-switch" id="langSwitch" aria-label="Язык перевода">
+        <button data-lang="ru" class="active" type="button">RU</button>
+        <button data-lang="en" type="button">EN</button>
+      </div>
     </div>
   </div>
-  <p class="sub" data-i18n="subtitle">Локальная LLM · сохранение структуры, изображений и оглавления</p>
+  <div class="hero-copy">
+    <h2 data-i18n="feature_title">Технический перевод без слепых зон.</h2>
+    <p class="sub" data-i18n="subtitle">Переводит весь документ, сохраняя исходное форматирование и структуру. Даже текст на изображениях.</p>
+  </div>
 
   <div class="card">
     <div class="drop" id="drop" tabindex="0" role="button">
@@ -272,13 +315,13 @@ HTML_PAGE = r"""<!doctype html>
     <div class="file-name" id="fileName"></div>
 
     <div class="opts">
-      <label><input type="checkbox" id="resume" checked> <span data-i18n="resume">Resume (пропустить готовые этапы)</span></label>
-      <label><input type="checkbox" id="fromTranslate"> <span data-i18n="translate_only">Только перевод</span></label>
-      <label><span data-i18n="limit">Лимит сегментов:</span> <input type="number" id="limit" min="0" value="0" title="0 = все"></label>
-      <label><span data-i18n="mode">Режим:</span>
+      <label><input type="checkbox" id="resume" checked> <span data-i18n="resume">Продолжить с сохранённых этапов</span></label>
+      <label><input type="checkbox" id="fromTranslate"> <span data-i18n="translate_only">Начать с этапа перевода</span></label>
+      <label><span data-i18n="limit">Ограничение сегментов:</span> <input type="number" id="limit" min="0" value="0" title="0 = все"></label>
+      <label><span data-i18n="mode">Способ обработки:</span>
         <select id="mode">
-          <option value="pipeline" data-i18n="mode_pipeline">Pipeline (сегменты)</option>
-          <option value="markdown" data-i18n="mode_markdown">Markdown (страница целиком)</option>
+          <option value="pipeline" data-i18n="mode_pipeline">По сегментам</option>
+          <option value="markdown" data-i18n="mode_markdown">Постранично</option>
         </select>
       </label>
     </div>
@@ -297,11 +340,11 @@ HTML_PAGE = r"""<!doctype html>
       <span class="timer" id="timer">00:00</span>
     </div>
     <div class="stage-list" id="stages">
-      <div class="stage" data-s="parse"><span class="t" data-i18n="stage1">1. Парсинг</span>parse.json</div>
-      <div class="stage" data-s="segment"><span class="t" data-i18n="stage2">2. Сегментация</span>segments.json</div>
-      <div class="stage" data-s="translate"><span class="t" data-i18n="stage3">3. Перевод</span>LLM · кэш</div>
-      <div class="stage" data-s="build"><span class="t" data-i18n="stage4">4. Сборка</span>_RU.pdf</div>
-      <div class="stage" data-s="validate"><span class="t" data-i18n="stage5">5. Валидация</span>проверка</div>
+      <div class="stage" data-s="parse"><span class="t" data-i18n="stage1">1. Извлечение</span><span data-i18n="stage1_hint">Структура PDF</span></div>
+      <div class="stage" data-s="segment"><span class="t" data-i18n="stage2">2. Разметка</span><span data-i18n="stage2_hint">Текстовые блоки</span></div>
+      <div class="stage" data-s="translate"><span class="t" data-i18n="stage3">3. Перевод</span><span data-i18n="stage3_hint">Модель и кэш</span></div>
+      <div class="stage" data-s="build"><span class="t" data-i18n="stage4">4. Сборка</span><span data-i18n="stage4_hint">Итоговый PDF</span></div>
+      <div class="stage" data-s="validate"><span class="t" data-i18n="stage5">5. Проверка</span><span data-i18n="stage5_hint">Контроль качества</span></div>
     </div>
     <div class="prog-wrap">
       <div class="prog" id="prog"></div>
@@ -333,7 +376,7 @@ HTML_PAGE = r"""<!doctype html>
     </div>
   </div>
 
-  <footer data-i18n="footer">Конвейер: PyMuPDF + OpenAI-совместимая LLM · <a href="/api/health" target="_blank">/api/health</a></footer>
+  <footer data-i18n="footer">Основа: PyMuPDF + OpenAI-совместимая модель · <a href="/api/health" target="_blank">/api/health</a></footer>
 </div>
 
 <!-- Модальное окно сброса этапов -->
@@ -358,144 +401,186 @@ HTML_PAGE = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 const I18N = {
   ru: {
-    title: 'PDF переводчик',
-    subtitle: 'Локальная LLM · сохранение структуры, изображений и оглавления',
+    title: 'Переводчик PDF',
+    feature_title: 'Технический перевод без слепых зон.',
+    subtitle: 'Переводит весь документ, сохраняя исходное форматирование и структуру. Даже текст на изображениях.',
     drop_title: 'Перетащите PDF сюда',
-    drop_or: 'или нажмите для выбора',
-    lang_hint: 'исходный → целевой',
-    resume: 'Resume (пропустить готовые этапы)',
-    translate_only: 'Только перевод',
-    limit: 'Лимит сегментов:',
-    mode: 'Режим:',
-    mode_pipeline: 'Pipeline (сегменты)',
-    mode_markdown: 'Markdown (страница целиком)',
-    start: 'Перевести',
+    drop_or: 'или выберите файл',
+    lang_hint: 'китайский → русский',
+    resume: 'Продолжить с сохранённых этапов',
+    translate_only: 'Начать с этапа перевода',
+    limit: 'Ограничение сегментов:',
+    mode: 'Способ обработки:',
+    mode_pipeline: 'По сегментам',
+    mode_markdown: 'Постранично',
+    start: 'Перевести на русский',
     cancel: 'Отмена',
-    reset: 'Сбросить кэш',
-    reset_title: 'Выберите этапы для удаления',
-    reset_sub: 'Следующий запуск начнётся с первого удалённого этапа.',
+    reset: 'Сбросить этапы',
+    reset_title: 'Какие этапы выполнить заново?',
+    reset_sub: 'Сохранённые результаты выбранных этапов будут удалены.',
     reset_all: 'Выбрать все',
-    reset_confirm_btn: 'Удалить и продолжить',
+    reset_confirm_btn: 'Сбросить выбранное',
     reset_cancel_btn: 'Отмена',
-    reset_done: 'Удалено: {items}. Следующий запуск начнётся с этого этапа.',
+    reset_done: 'Сброшено: {items}.',
     reset_none: 'Не выбран ни один этап.',
     reset_err: 'Ошибка сброса: ',
     waiting: 'Ожидание запуска…',
-    stage1: '1. Парсинг', stage2: '2. Сегментация', stage3: '3. Перевод',
-    stage4: '4. Сборка', stage5: '5. Валидация',
-    download: 'Скачать результат PDF',
-    preview_base: 'Просмотреть базовый PDF',
-    image_title: 'Перевести текст внутри изображений',
-    image_preview_hint: 'Сначала просмотрите базовый PDF, затем запустите дополнительную обработку.',
-    image_ready_hint: 'Базовый PDF просмотрен. Можно запустить обработку изображений.',
-    image_running_hint: 'Дополнительная обработка изображений выполняется…',
-    image_done_hint: 'Улучшенный PDF готов. Базовый PDF сохранён без изменений.',
-    image_error_hint: 'Не удалось обработать изображения. Базовый PDF по-прежнему доступен.',
-    image_cancelled_hint: 'Обработка изображений отменена. Базовый PDF не изменён.',
-    image_start: 'Обработать изображения',
-    image_retry: 'Повторить обработку',
-    image_cancel: 'Отменить обработку',
-    image_preview: 'Просмотреть улучшенный PDF',
-    image_download: 'Скачать улучшенный PDF',
+    stage1: '1. Извлечение', stage2: '2. Разметка', stage3: '3. Перевод',
+    stage4: '4. Сборка', stage5: '5. Проверка',
+    stage1_hint: 'Структура PDF', stage2_hint: 'Текстовые блоки',
+    stage3_hint: 'Модель и кэш', stage4_hint: 'Итоговый PDF',
+    stage5_hint: 'Контроль качества',
+    download: 'Скачать перевод',
+    preview_base: 'Открыть перевод',
+    image_title: 'Перевести надписи на изображениях',
+    image_preview_hint: 'Сначала откройте основной перевод и проверьте результат.',
+    image_ready_hint: 'Основной перевод просмотрен. Можно обработать изображения.',
+    image_running_hint: 'Перевод надписей на изображениях выполняется…',
+    image_done_hint: 'Версия с переведёнными изображениями готова. Основной файл сохранён.',
+    image_error_hint: 'Не удалось обработать изображения. Основной перевод доступен.',
+    image_cancelled_hint: 'Обработка изображений отменена. Основной перевод не изменён.',
+    image_start: 'Перевести изображения',
+    image_retry: 'Повторить',
+    image_cancel: 'Остановить',
+    image_preview: 'Открыть версию с изображениями',
+    image_download: 'Скачать версию с изображениями',
     image_start_error: 'Не удалось запустить обработку изображений: ',
-    image_cancel_req: 'Запрошена отмена обработки изображений…',
-    image_phase: 'Фаза: ',
-    footer: 'Конвейер: PyMuPDF + OpenAI-совместимая LLM · ',
+    image_cancel_req: 'Останавливаю обработку изображений…',
+    image_phase: 'Этап: ',
+    footer: 'Основа: PyMuPDF + OpenAI-совместимая модель · ',
+    theme_light: 'Включить светлую тему',
+    theme_dark: 'Включить тёмную тему',
+    language_label: 'Язык перевода',
+    limit_title: '0 — перевести все сегменты',
     need_pdf: 'Нужен PDF-файл',
     err_upload: 'Ошибка загрузки: ',
-    err_start: 'Не удалось запустить конвейер',
+    err_start: 'Не удалось запустить перевод',
     err_net: 'Сетевая ошибка: ',
-    cancel_req: 'Запрошена отмена…',
-    starting: 'Запуск конвейера…',
+    cancel_req: 'Останавливаю перевод…',
+    starting: 'Подготовка к переводу…',
     stage_running: 'Идёт «{stage}»…',
     done: 'Готово — перевод завершён',
-    error: 'Ошибка — см. лог',
+    error: 'Ошибка — подробности в журнале',
     cancelled: 'Отменено',
     waiting_short: 'Ожидание…',
-    stat_stage: 'Этап: ', stat_segs: 'Сегментов: ', stat_ok: 'OK: ',
+    stat_stage: 'Этап: ', stat_segs: 'Сегментов: ', stat_ok: 'Успешно: ',
     stat_cached: 'Из кэша: ', stat_fail: 'Ошибок: ',
     stat_pages: 'Страниц: ', stat_images: 'Изображений: ',
     stat_status: 'Статус: ',
-    pipeline_err: 'Конвейер завершился с ошибкой. См. log/translate.log',
-    stages: {parse:'Парсинг PDF', segment:'Сегментация',
-      translate:'Перевод через LLM', build:'Сборка PDF', validate:'Валидация'},
+    pipeline_err: 'Перевод завершился с ошибкой. Подробности указаны в журнале.',
+    stages: {parse:'Извлечение структуры', segment:'Разметка текста',
+      translate:'Перевод текста', build:'Сборка PDF', validate:'Проверка результата'},
     states: {idle:'ожидание',queued:'в очереди',running:'выполняется',done:'готово',
       error:'ошибка',cancelled:'отменено'},
   },
   en: {
     title: 'PDF translator',
-    subtitle: 'Local LLM · preserves structure, images and table of contents',
+    feature_title: 'Technical translation with no blind spots.',
+    subtitle: 'It translates the entire document while preserving its original formatting and structure — even text embedded in images.',
     drop_title: 'Drop PDF here',
-    drop_or: 'or click to browse',
-    lang_hint: 'source → target',
-    resume: 'Resume (skip finished stages)',
-    translate_only: 'Translation only',
+    drop_or: 'or choose a file',
+    lang_hint: 'Chinese → English',
+    resume: 'Continue from saved stages',
+    translate_only: 'Start from translation',
     limit: 'Segment limit:',
-    mode: 'Mode:',
-    mode_pipeline: 'Pipeline (segments)',
-    mode_markdown: 'Markdown (whole page)',
-    start: 'Translate',
+    mode: 'Processing method:',
+    mode_pipeline: 'Segment by segment',
+    mode_markdown: 'Page by page',
+    start: 'Translate to English',
     cancel: 'Cancel',
-    reset: 'Reset cache',
-    reset_title: 'Select stages to delete',
-    reset_sub: 'Next run will start from the first deleted stage.',
+    reset: 'Reset stages',
+    reset_title: 'Which stages should run again?',
+    reset_sub: 'Saved results for the selected stages will be removed.',
     reset_all: 'Select all',
-    reset_confirm_btn: 'Delete and continue',
+    reset_confirm_btn: 'Reset selected stages',
     reset_cancel_btn: 'Cancel',
-    reset_done: 'Deleted: {items}. Next run will start from this stage.',
+    reset_done: 'Reset: {items}.',
     reset_none: 'No stage selected.',
     reset_err: 'Reset error: ',
     waiting: 'Waiting to start…',
-    stage1: '1. Parse', stage2: '2. Segment', stage3: '3. Translate',
-    stage4: '4. Build', stage5: '5. Validate',
-    download: 'Download result PDF',
-    preview_base: 'Preview base PDF',
-    image_title: 'Translate text inside images',
-    image_preview_hint: 'Preview the base PDF first, then start the optional image pass.',
-    image_ready_hint: 'Base PDF previewed. Image processing can now be started.',
-    image_running_hint: 'Optional image processing is running…',
-    image_done_hint: 'Enhanced PDF is ready. The base PDF was left unchanged.',
-    image_error_hint: 'Image processing failed. The base PDF is still available.',
-    image_cancelled_hint: 'Image processing was cancelled. The base PDF was not changed.',
-    image_start: 'Process images',
-    image_retry: 'Retry image processing',
-    image_cancel: 'Cancel image processing',
-    image_preview: 'Preview enhanced PDF',
-    image_download: 'Download enhanced PDF',
+    stage1: '1. Extract', stage2: '2. Structure', stage3: '3. Translate',
+    stage4: '4. Build', stage5: '5. Review',
+    stage1_hint: 'PDF structure', stage2_hint: 'Text blocks',
+    stage3_hint: 'Model and cache', stage4_hint: 'Translated PDF',
+    stage5_hint: 'Quality checks',
+    download: 'Download translation',
+    preview_base: 'Open translation',
+    image_title: 'Translate text in embedded images',
+    image_preview_hint: 'Open and review the main translation before processing images.',
+    image_ready_hint: 'The main translation has been reviewed. Image processing is available.',
+    image_running_hint: 'Translating text in embedded images…',
+    image_done_hint: 'The image-translated version is ready. The main file is unchanged.',
+    image_error_hint: 'Image processing failed. The main translation is still available.',
+    image_cancelled_hint: 'Image processing was cancelled. The main translation is unchanged.',
+    image_start: 'Translate images',
+    image_retry: 'Try again',
+    image_cancel: 'Stop',
+    image_preview: 'Open image-translated version',
+    image_download: 'Download image-translated version',
     image_start_error: 'Could not start image processing: ',
-    image_cancel_req: 'Image processing cancellation requested…',
-    image_phase: 'Phase: ',
-    footer: 'Pipeline: PyMuPDF + OpenAI-compatible LLM · ',
+    image_cancel_req: 'Stopping image processing…',
+    image_phase: 'Stage: ',
+    footer: 'Built with PyMuPDF and an OpenAI-compatible model · ',
+    theme_light: 'Switch to light theme',
+    theme_dark: 'Switch to dark theme',
+    language_label: 'Translation language',
+    limit_title: '0 translates all segments',
     need_pdf: 'PDF file required',
     err_upload: 'Upload error: ',
-    err_start: 'Failed to start pipeline',
+    err_start: 'Failed to start translation',
     err_net: 'Network error: ',
-    cancel_req: 'Cancel requested…',
-    starting: 'Starting pipeline…',
+    cancel_req: 'Stopping translation…',
+    starting: 'Preparing translation…',
     stage_running: 'Running «{stage}»…',
     done: 'Done — translation finished',
-    error: 'Error — see log',
+    error: 'Error — see the processing log',
     cancelled: 'Cancelled',
     waiting_short: 'Waiting…',
-    stat_stage: 'Stage: ', stat_segs: 'Segments: ', stat_ok: 'OK: ',
+    stat_stage: 'Stage: ', stat_segs: 'Segments: ', stat_ok: 'Completed: ',
     stat_cached: 'Cached: ', stat_fail: 'Errors: ',
     stat_pages: 'Pages: ', stat_images: 'Images: ',
     stat_status: 'Status: ',
-    pipeline_err: 'Pipeline finished with error. See log/translate.log',
-    stages: {parse:'Parsing PDF', segment:'Segmentation',
-      translate:'LLM translation', build:'Building PDF', validate:'Validation'},
+    pipeline_err: 'Translation failed. See the processing log for details.',
+    stages: {parse:'Extracting structure', segment:'Structuring text',
+      translate:'Translating text', build:'Building PDF', validate:'Reviewing output'},
     states: {idle:'idle',queued:'queued',running:'running',done:'done',
       error:'error',cancelled:'cancelled'},
   },
 };
 let LANG = localStorage.getItem('ui_lang') || 'ru';
+if (!['ru','en'].includes(LANG)) LANG = 'ru';
+let SOURCE_LANG = 'zh';
+let THEME = localStorage.getItem('ui_theme');
+if (!['light','dark'].includes(THEME)){
+  THEME = window.matchMedia &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+document.documentElement.dataset.theme = THEME;
+
+function targetLang(){
+  return LANG === 'en' ? 'en' : 'ru';
+}
 function t(key, vars){
   let s = (I18N[LANG] && I18N[LANG][key]) || (I18N.ru[key]) || key;
   if (vars) for (const k in vars) s = s.replace('{'+k+'}', vars[k]);
   return s;
 }
+function updateLanguagePair(){
+  const target = targetLang();
+  $('#langBadge').textContent = SOURCE_LANG.toUpperCase()+' → '+target.toUpperCase();
+  $('#langHint').textContent = LANG === 'en'
+    ? 'Chinese → English'
+    : 'китайский → русский';
+}
+function updateThemeControl(){
+  const label = THEME === 'dark' ? t('theme_light') : t('theme_dark');
+  const button = $('#themeToggle');
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
 function applyI18n(){
   document.documentElement.lang = LANG;
+  document.title = t('title');
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
     // сохраняем встроенные дочерние элементы (badge, ссылки)
@@ -511,6 +596,11 @@ function applyI18n(){
   document.querySelectorAll('#langSwitch button').forEach(b => {
     b.classList.toggle('active', b.dataset.lang === LANG);
   });
+  $('#langSwitch').setAttribute('aria-label', t('language_label'));
+  $('#limit').title = t('limit_title');
+  drop?.setAttribute('aria-label', t('drop_title')+' — '+t('drop_or'));
+  updateLanguagePair();
+  updateThemeControl();
   // обновить динамические части
   const job = currentJob;
   if (job && JOBS_STATE) update(JOBS_STATE);
@@ -522,14 +612,19 @@ document.querySelectorAll('#langSwitch button').forEach(b => {
     applyI18n();
   });
 });
+$('#themeToggle').addEventListener('click', () => {
+  THEME = THEME === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = THEME;
+  localStorage.setItem('ui_theme', THEME);
+  updateThemeControl();
+});
 
 let currentJob = null, pollTimer = null, selectedFile = null, JOBS_STATE = null;
 let imagePostAvailable = false, basePreviewed = false;
 
 fetch('/api/config').then(r=>r.json()).then(c=>{
-  const src = c.source_lang||'?', tgt = c.target_lang||'?';
-  $('#langBadge').textContent = src.toUpperCase()+' → '+tgt.toUpperCase();
-  $('#langHint').textContent = src+' → '+tgt;
+  SOURCE_LANG = c.source_lang || 'zh';
+  updateLanguagePair();
   imagePostAvailable = !!(c.image_postprocess && c.image_postprocess.available);
   if (JOBS_STATE) updateImagePost(JOBS_STATE.image_post);
 });
@@ -634,6 +729,7 @@ startBtn.addEventListener('click', async () => {
       resume: $('#resume').checked, from_translate: $('#fromTranslate').checked,
       limit: parseInt($('#limit').value)||0,
       mode: $('#mode').value,
+      target_lang: targetLang(),
     };
     const r2 = await fetch('/api/start', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1140,7 +1236,9 @@ def _run_image_postprocess(job: dict) -> None:
                 stale.unlink()
 
         cmd = [
-            sys.executable, "-m", "app.cli", "--image-postprocess",
+            sys.executable, "-m", "app.cli",
+            "--target-lang", str(job.get("target_lang") or "ru"),
+            "--image-postprocess",
             str(base_path), "--out", str(partial_path),
         ]
         env = dict(os.environ)
@@ -1280,9 +1378,13 @@ def _run_image_postprocess(job: dict) -> None:
             IMAGE_POST_SEMAPHORE.release()
 
 
-def _new_job(src_path: str, job_id: str | None = None) -> dict:
+def _new_job(src_path: str, job_id: str | None = None,
+             target_lang: str | None = None) -> dict:
     cfg = load_config()
-    tgt = cfg.get("target_lang", "ru").upper()
+    target_lang = str(target_lang or cfg.get("target_lang", "ru")).lower()
+    if target_lang not in {"ru", "en"}:
+        target_lang = "ru"
+    tgt = target_lang.upper()
     job_id = job_id or uuid.uuid4().hex[:12]
     stem = Path(src_path).stem
     # срезаем job_id-префикс, добавленный при upload
@@ -1295,6 +1397,7 @@ def _new_job(src_path: str, job_id: str | None = None) -> dict:
     out_name = f"{job_id}_{download_name}"
     return {
         "job_id": job_id,
+        "target_lang": target_lang,
         "src": src_path,
         "out_path": str(UPLOADS.resolve() / out_name),
         "download_name": download_name,
@@ -1311,7 +1414,8 @@ def _run_pipeline(job: dict, resume: bool, from_translate: bool, limit: int,
                   mode: str = "pipeline"):
     cmd = [sys.executable, "-m", "app.cli",
            "--in", job["src"], "--out", job["out_path"],
-           "--mode", mode]
+           "--mode", mode,
+           "--target-lang", str(job.get("target_lang") or "ru")]
     if resume:
         cmd.append("--resume")
     if from_translate:
@@ -1391,7 +1495,10 @@ def _run_pipeline(job: dict, resume: bool, from_translate: bool, limit: int,
     if out_p.exists():
         try:
             cfg = load_config()
-            tgt = cfg.get("target_lang", "ru").upper()
+            configure_target_language(
+                cfg, str(job.get("target_lang") or "ru")
+            )
+            tgt = cfg["target_lang"].upper()
             src_stem = Path(src_value).stem
             translated = translate_filename_stem(src_stem, cfg)
             safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", translated)
@@ -1502,6 +1609,7 @@ async def api_config():
     image_available, image_reason = _image_postprocess_capability(cfg)
     return {"source_lang": cfg.get("source_lang", "?"),
             "target_lang": cfg.get("target_lang", "?"),
+            "target_languages": ["ru", "en"],
             "image_postprocess": {
                 "available": image_available,
                 "reason": image_reason,
@@ -1569,8 +1677,11 @@ async def start(payload: dict, background_tasks: BackgroundTasks = None):
     from_translate = bool(payload.get("from_translate", False))
     limit = int(payload.get("limit", 0) or 0)
     mode = payload.get("mode", "pipeline")
+    target_lang = str(payload.get("target_lang") or "ru").lower()
     if mode not in ("pipeline", "markdown"):
         mode = "pipeline"
+    if target_lang not in {"ru", "en"}:
+        raise HTTPException(400, "поддерживаются языки результата: ru, en")
     if not job_id or not src:
         raise HTTPException(400, "требуются поля job и src")
     if not re.fullmatch(r"[0-9a-f]{12}", str(job_id)):
@@ -1584,10 +1695,11 @@ async def start(payload: dict, background_tasks: BackgroundTasks = None):
     with JOBS_LOCK:
         if job_id in JOBS:
             raise HTTPException(409, "job уже запущен")
-        j = _new_job(str(src_path), job_id)
+        j = _new_job(str(src_path), job_id, target_lang=target_lang)
         JOBS[job_id] = j
     background_tasks.add_task(_run_pipeline, j, resume, from_translate, limit, mode)
-    return {"job_id": job_id, "state": "running"}
+    return {"job_id": job_id, "state": "running",
+            "target_lang": target_lang}
 
 
 @app.get("/api/status")
@@ -1614,6 +1726,7 @@ async def status(job: str):
         }
         return {
             "state": j["state"], "stage": j["stage"],
+            "target_lang": j.get("target_lang", "ru"),
             "progress": j["progress"], "total": j["total"],
             "ok": j["ok"], "cached": j["cached"], "fail": j["fail"],
             "pages": j["pages"], "images": j["images"],

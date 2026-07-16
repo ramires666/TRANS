@@ -20,12 +20,13 @@ from pipeline.config.loader import ROOT
 from pipeline.translate.translator import _critical_tokens
 
 
-VISION_PROMPT_VERSION = "vision-regions-v3"
+VISION_PROMPT_VERSION = "vision-regions-v4"
 VISION_PROMPT = """You are a precise OCR engine for technical screenshots.
 Follow the user's image-extraction instructions. Return only the JSON object
 constrained by the supplied schema. Never emit reasoning, Markdown or prose."""
 VISION_USER_PROMPT = """Inspect the complete image. Extract only confidently
 readable visible {src_lang} text and translate it concisely into {tgt_lang}.
+{target_style}
 Each item is one complete semantic label or line, in reading order; do not
 merge separate controls. bbox=[x0,y0,x1,y1] uses integer coordinates normalized
 from 0 to 1000 for the full image, with x0<x1 and y0<y1. source_text is an exact
@@ -363,6 +364,11 @@ class VisionTranslator:
             instruction = VISION_USER_PROMPT.format(
                 src_lang=src_lang,
                 tgt_lang=tgt_lang,
+                target_style=(
+                    "For English, write natural, concise technical UI copy using "
+                    "standard industry terminology; avoid literal Chinese calques."
+                    if _base_lang(tgt_lang) == "en" else ""
+                ),
             )
             if attempt > 1:
                 instruction += (
